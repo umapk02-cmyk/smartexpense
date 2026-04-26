@@ -1,0 +1,82 @@
+==============================================
+SMARTEXPENSE — SUPABASE SETUP GUIDE
+==============================================
+
+STEP 1: Create Supabase project
+--------------------------------
+1. Go to https://supabase.com
+2. Sign up free with Google
+3. Click "New Project"
+4. Name it: homeexpense
+5. Set a password (save it)
+6. Choose region: Southeast Asia (Singapore)
+7. Click "Create project" — wait 2 minutes
+
+STEP 2: Create the tables
+---------------------------
+1. In Supabase dashboard → click "SQL Editor"
+2. Paste this SQL and click "Run":
+
+CREATE TABLE expenses (
+  id BIGSERIAL PRIMARY KEY,
+  amount NUMERIC NOT NULL,
+  description TEXT,
+  category TEXT,
+  account TEXT,
+  date TIMESTAMPTZ DEFAULT NOW(),
+  entered_by TEXT,
+  month TEXT,
+  year TEXT,
+  day INTEGER,
+  note TEXT
+);
+
+CREATE TABLE budgets (
+  id BIGSERIAL PRIMARY KEY,
+  category TEXT UNIQUE NOT NULL,
+  amount NUMERIC DEFAULT 0
+);
+
+-- Allow public access (no auth needed)
+ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE budgets ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all" ON expenses FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON budgets FOR ALL USING (true) WITH CHECK (true);
+
+
+STEP 3: Get your credentials
+------------------------------
+1. In Supabase dashboard → Settings → API
+2. Copy "Project URL" (looks like: https://xxxx.supabase.co)
+3. Copy "anon public" key (long string starting with eyJ...)
+
+STEP 4: Paste into app.js
+---------------------------
+Open app.js and find lines 3-4:
+
+const SUPABASE_URL = "PASTE_YOUR_SUPABASE_URL_HERE";
+const SUPABASE_KEY = "PASTE_YOUR_SUPABASE_ANON_KEY_HERE";
+
+Replace with your actual values. Example:
+const SUPABASE_URL = "https://abcdefgh.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...";
+
+STEP 5: Deploy to Netlify
+--------------------------
+1. Go to https://app.netlify.com/drop
+2. Drag and drop the smartexpense FOLDER
+3. Get your URL — bookmark on both phones!
+
+LOGINS:
+  Uma: PIN 1111
+  Husband: PIN 2222
+
+HOW IT WORKS:
+- Entry has only 3 fields: Amount, Description, Account
+- Category is AUTO-DETECTED from description keywords
+  e.g. "swiggy" → Dining Out, "milk" → Groceries
+- Click any entry to edit it
+- Export tab: pick date range → download CSV
+- All data saves to Supabase (works on any device!)
+==============================================
