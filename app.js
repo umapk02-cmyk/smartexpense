@@ -3,7 +3,7 @@
 // ============================================================
 const SUPABASE_URL = “https://gktipiisfpwijfbnswre.supabase.co”;
 const SUPABASE_KEY = “eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdrdGlwaWlzZnB3aWpmYm5zd3JlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxMjMyMDAsImV4cCI6MjA5MjY5OTIwMH0.F4hs86rodUHlBLilCNua97jjofo5tB2F7QCMxy0YFTQ”;
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const sb = (window.supabase || supabase).createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ============================================================
 // CONSTANTS — unchanged from original
