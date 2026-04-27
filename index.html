@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SmartExpense</title>
+  <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f0f4f8}input,select,button{font-family:inherit}</style>
+  <link rel="manifest" href="/manifest.json"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="SmartExpense"/>
+  <meta name="theme-color" content="#1F4E79"/>
+  <link rel="apple-touch-icon" href="/icon.svg"/>
+</head>
+<body>
+  <div id="root" style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px;color:#1F4E79">
+    <div style="font-size:40px">🏡</div>
+    <div style="font-size:16px">Loading SmartExpense…</div>
+  </div>
+  <script>
+    // Load scripts one by one to ensure order
+    function loadScript(src, onload) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.onload = onload;
+      s.onerror = function() { 
+        document.getElementById('root').innerHTML = '<div style="padding:20px;color:red;text-align:center"><h3>Failed to load: ' + src + '</h3><p>Check your internet connection</p></div>';
+      };
+      document.head.appendChild(s);
+    }
+    loadScript('https://unpkg.com/react@18.2.0/umd/react.production.min.js', function() {
+      loadScript('https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js', function() {
+        loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js', function() {
+          loadScript('app.js', function() {
+            console.log('All scripts loaded');
+          });
+        });
+      });
+    });
+  </script>
+</body>
+</html>
