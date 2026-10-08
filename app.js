@@ -48,8 +48,12 @@ const SOURCES = [
   { label:"Axis Bank",    color:"#1E8449", light:"#D5F5E3" },
   { label:"Cash / UPI",   color:"#C65911", light:"#FCE4D6" },
   { label:"BBDaily",      color:"#6C3483", light:"#E8DAEF" },
-  { label:"Akshayakalpa", color:"#117A65", light:"#D1F2EB" }
+  { label:"Akshayakalpa", color:"#117A65", light:"#D1F2EB" },
+  { label:"Store Wallet", color:"#B03A2E", light:"#F9E0DD" }
 ];
+// Accounts that are prepaid store wallets (money already loaded earlier)
+const WALLET_ACCOUNTS = ["BBDaily","Akshayakalpa","Store Wallet"];
+const ACCOUNT_VENDOR = { "BBDaily":"BigBasket", "Akshayakalpa":"Akshayakalpa" };
 const ICONS = {
   "Groceries & Vegetables":"🥦","Kids Activities & School":"🎒","Utilities (Electricity/Water/Gas)":"💡",
   "Household Help (Maid/Cook/Driver)":"🏠","Restaurants":"🍜",
@@ -57,8 +61,14 @@ const ICONS = {
   "Shopping & Clothing":"👗","Subscriptions (OTT/Internet)":"📱","Toiletries & Cleaning Supplies":"🧴",
   "Gardening":"🌿","Gifts":"🎁","Wallet / FASTag Recharge":"💳","Entertainment":"🎬","Laundry":"👕",
   "Personal Care & Grooming":"💅","Travel & Holidays":"✈️","Jewellery & Valuables":"💎",
-  "Legal & Documentation":"📄","Household & Misc":"📦","One-Time / Extra Expenses":"⚡","Miscellaneous":"❔"
+  "Legal & Documentation":"📄","Household & Misc":"📦","One-Time / Extra Expenses":"⚡","Miscellaneous":"❔",
+  "Wallet / Voucher Load (not spend)":"🔁"
 };
+// Money moved into a store wallet/voucher. NOT counted as spending — the real
+// spend is logged later, order by order, when the wallet is used.
+const TRANSFER_CAT = "Wallet / Voucher Load (not spend)";
+const ALL_CATEGORIES = [...CATEGORIES, TRANSFER_CAT];
+const isSpend = r => r.category !== TRANSFER_CAT;
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DIM = {January:31,February:28,March:31,April:30,May:31,June:30,July:31,August:31,September:30,October:31,November:30,December:31};
 
@@ -66,12 +76,12 @@ const DIM = {January:31,February:28,March:31,April:30,May:31,June:30,July:31,Aug
 // AUTO CATEGORY — keyword matching on description
 // ============================================================
 const KEYWORD_MAP = [
-  { keywords:["swiggy","zomato","eatsure","dunzo","cake","pastry","restaurant","hotel","cafe","coffee","sweets","bakery","pizza","burger","biryani","dining","snack","snacks","juice","ice cream","dessert","mithai","breakfast","lunch","dinner","donut","popcorn","food coupon"], category:"Restaurants" },
+  { keywords:["swiggy","zomato","eatsure","dunzo","cake","pastry","restaurant","hotel","cafe","coffee","sweets","bakery","pizza","burger","biryani","dining","snack","snacks","juice","ice cream","dessert","mithai","breakfast","lunch","dinner","donut","popcorn","food coupon","chips","biscuit","biscuits","namkeen","kurkure","cold drink","soft drink","coke","pepsi","energy drink"], category:"Restaurants" },
   { keywords:["recharge","mobile recharge","prepaid","talktime","data pack","sim","vodafone","idea","bsnl","fastag","wallet","paytm","gpay","phonepe","load","fasttag","bbdaily wallet","akshayakalpa recharge"], category:"Wallet / FASTag Recharge" },
-  { keywords:["doctor","hospital","pharmacy","medicine","apollo","clinic","lab","test","dental","tablets","injection","medical belt"], category:"Medical & Pharmacy" },
+  { keywords:["doctor","hospital","pharmacy","medicine","apollo","clinic","lab","test","dental","tablets","injection","medical belt","paracetamol","crocin","vicks","ointment","bandage","band aid","cough"], category:"Medical & Pharmacy" },
   { keywords:["school fee","annual fee","term fee","vehicle repair","car repair","bike repair","car service","vehicle service","garage","mechanic","holiday","trip payment","vacation","tour package","flight ticket","flight tickets","air ticket","emergency","unplanned","one time","one-time"], category:"One-Time / Extra Expenses" },
   { keywords:["milk","akshaya","bbdaily","vegetables","vegetable","sabzi","groceries","grocery","bigbasket","zepto","blinkit","dmart","fruits","fruit","veggies","kirana","paneer","curd","bread","cheese","pappadam","yogurt","masala","rice","sauce","dosa batter","potato","jaggery","coconut","buttermilk","onion","tomato","tea","chocolate","grapes","apple","banana","mango","orange","watermelon","papaya","pomegranate","guava","carrot","cabbage","cauliflower","beans","brinjal","capsicum","cucumber","spinach","ginger","garlic","chilli","lemon","eggs","bread","butter","ghee","sugar","salt","flour","atta","pulses","dal","lentils","cereal","oats","cooking oil","edible oil","sunflower oil","coconut oil"], category:"Groceries & Vegetables" },
-  { keywords:["fees","tuition fee","class fee","exam fee","course fee","class","tuition","course","coaching","exam","becker","college","books","book","stationery","stationary","school shoes","school uniform","school bag","dance class","music class","football","kannada","french class","math class","phonics","theatre class","kathakali","swimming","print out","printout","photocopy","photocopying","school water bottle","school lunch box","lunch box","school supplies"], category:"Kids Activities & School" },
+  { keywords:["fees","tuition fee","class fee","exam fee","course fee","class","tuition","course","coaching","exam","becker","college","books","book","stationery","stationary","school shoes","school uniform","school bag","dance class","music class","football","kannada","french class","math class","phonics","theatre class","kathakali","swimming","print out","printout","photocopy","photocopying","school water bottle","school lunch box","lunch box","school supplies","pencil","pencils","notebook","notebooks","crayon","crayons","eraser","sketch pen","geometry box"], category:"Kids Activities & School" },
   { keywords:["netflix","hotstar","spotify","prime","jio","airtel","internet","wifi","ott subscription","subscription","disney","newspaper","phone bill","act broadband","act internet","broadband"], category:"Subscriptions (OTT/Internet)" },
   { keywords:["uber","ola cab","auto","taxi","rapido","cab","metro","bus","rickshaw"], category:"Taxi / Auto" },
   { keywords:["petrol","diesel","fuel","cng","hp","bharat","shell","car wash"], category:"Transport & Fuel" },
@@ -101,6 +111,50 @@ function autoCategory(description) {
 }
 
 // ============================================================
+// VENDOR / PLATFORM TRACKING
+// ============================================================
+const VENDORS = ["Amazon","Flipkart","Myntra","BigBasket","Zepto","Blinkit","Instamart","Firstclub","Akshayakalpa","Swiggy/Zomato","DMart","Direct/Shop","Cash/Other"];
+// Vendors that work like a wallet: a voucher/wallet load is a transfer, orders are logged separately
+const WALLET_VENDORS = ["BigBasket","Zepto","Blinkit","Instamart","Firstclub","Akshayakalpa"];
+// Vendors whose orders default to Groceries when the item itself isn't recognised
+const GROCERY_VENDORS = ["BigBasket","Zepto","Blinkit","Instamart","Firstclub","DMart"];
+const VENDOR_KEYWORDS = [
+  { keywords:["instamart"], vendor:"Instamart" },
+  { keywords:["amazon"], vendor:"Amazon" }, { keywords:["flipkart"], vendor:"Flipkart" },
+  { keywords:["myntra"], vendor:"Myntra" }, { keywords:["bigbasket","big basket","bbnow","bbdaily","bb daily"], vendor:"BigBasket" },
+  { keywords:["zepto"], vendor:"Zepto" }, { keywords:["blinkit"], vendor:"Blinkit" },
+  { keywords:["firstclub","first club"], vendor:"Firstclub" },
+  { keywords:["akshayakalpa","akshaya kalpa"], vendor:"Akshayakalpa" },
+  { keywords:["swiggy","zomato"], vendor:"Swiggy/Zomato" }, { keywords:["dmart","d mart"], vendor:"DMart" },
+];
+function autoVendor(description) {
+  if (!description) return "";
+  const d = description.toLowerCase();
+  for (const rule of VENDOR_KEYWORDS) { if (rule.keywords.some(k => d.includes(k))) return rule.vendor; }
+  return "";
+}
+const LOAD_WORDS = ["voucher","wallet","recharge","rexharge","top up","top-up","topup","gift card","load"];
+function isLoadEntry(description, vendor, source) {
+  if (!description) return false;
+  const d = description.toLowerCase();
+  if (!LOAD_WORDS.some(w => d.includes(w))) return false;
+  if (!WALLET_VENDORS.includes(vendor)) return false;
+  if (WALLET_ACCOUNTS.includes(source)) return false;   // paid FROM a wallet = a real order, not a load
+  return true;
+}
+// Platform names are stripped so the ITEM decides the category ("zepto pencils" -> school, not groceries)
+const PLATFORM_WORDS = ["swiggy instamart","instamart","zepto","blinkit","bigbasket","big basket","bbnow","firstclub","first club","dmart","d mart","amazon","flipkart"];
+function categorize(description, vendor, source) {
+  if (isLoadEntry(description, vendor, source)) return TRANSFER_CAT;
+  let d = (description || "").toLowerCase();
+  if (vendor && vendor !== "Swiggy/Zomato" && vendor !== "Myntra") PLATFORM_WORDS.forEach(w => { d = d.split(w).join(" "); });
+  else if (vendor === "Swiggy/Zomato") { /* keep: food apps are Restaurants */ }
+  const cat = autoCategory(d.trim() ? d : description);
+  if (cat === "Miscellaneous" && GROCERY_VENDORS.includes(vendor)) return "Groceries & Vegetables";
+  return cat;
+}
+
+// ============================================================
 // SUPABASE DATA LAYER — replaces Google Sheets
 // ============================================================
 async function dbInsert(row) {
@@ -115,6 +169,7 @@ async function dbInsert(row) {
     year:      row.year,
     day:       row.day,
     note:      row.note || row.description,
+    vendor:    row.vendor || null,
   };
   try {
     const { data, error } = await sb.from("expenses").insert([payload]).select();
@@ -160,6 +215,7 @@ async function dbFetch(month, year) {
     enteredBy:   r.entered_by || "",
     timestamp:   new Date(r.date).getTime(),
     date:        r.date,
+    vendor:      r.vendor || "",
   }));
 }
 
@@ -184,6 +240,7 @@ async function dbUpdate(id, changes) {
     category:    changes.category,
     account:     changes.source,
     note:        changes.note || changes.description,
+    vendor:      changes.vendor || null,
   }).eq("id", numId);
   if (error) throw error;
 }
@@ -199,8 +256,16 @@ async function dbFetchRange(from, to) {
   return (data || []).map(r => ({
     id: String(r.id), amount: parseFloat(r.amount)||0,
     description: r.description||"", category: r.category||"Miscellaneous",
-    source: r.account||"", date: r.date, enteredBy: r.entered_by||"",
+    source: r.account||"", date: r.date, enteredBy: r.entered_by||"", vendor: r.vendor||"",
   }));
+}
+
+// All-time rows that have a vendor — used for wallet balances
+async function dbFetchVendorRows() {
+  const { data, error } = await sb.from("expenses")
+    .select("amount,category,account,vendor").not("vendor","is",null).limit(5000);
+  if (error) throw error;
+  return (data||[]).map(r=>({ amount: parseFloat(r.amount)||0, category: r.category||"", source: r.account||"", vendor: r.vendor||"" }));
 }
 
 async function dbFetchBudgets() {
@@ -279,12 +344,13 @@ function EditModal({row, onSave, onCancel}) {
   const [desc,setDesc] = useState(row.description || row.note || "");
   const [cat,setCat]   = useState(row.category);
   const [src,setSrc]   = useState(row.source);
+  const [ven,setVen]   = useState(row.vendor || "");
   const [saving,setSaving] = useState(false);
 
   async function handleSave() {
     if (!amt || parseFloat(amt)<=0) return;
     setSaving(true);
-    await onSave(row.id, { amount:parseFloat(amt), description:desc, category:cat, source:src, note:desc });
+    await onSave(row.id, { amount:parseFloat(amt), description:desc, category:cat, source:src, vendor:ven, note:desc });
   }
 
   const overlay = {position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16};
@@ -297,11 +363,13 @@ function EditModal({row, onSave, onCancel}) {
       e("label",{style:{fontSize:11,fontWeight:600,color:"#374151"}},"₹ Amount"),
       e("input",{type:"number",value:amt,onChange:ev=>setAmt(ev.target.value),style:inp}),
       e("label",{style:{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginTop:10}},"📝 Description"),
-      e("input",{type:"text",value:desc,onChange:ev=>{setDesc(ev.target.value);setCat(autoCategory(ev.target.value));},style:inp}),
+      e("input",{type:"text",value:desc,onChange:ev=>{const v=ev.target.value;setDesc(v);const av=autoVendor(v)||ven;if(autoVendor(v))setVen(av);setCat(categorize(v,av,src));},style:inp}),
       e("label",{style:{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginTop:10}},"🏷️ Category (auto-detected, editable)"),
-      e("select",{value:cat,onChange:ev=>setCat(ev.target.value),style:{...inp}},CATEGORIES.map(c=>e("option",{key:c,value:c},ICONS[c]+" "+c))),
+      e("select",{value:cat,onChange:ev=>setCat(ev.target.value),style:{...inp}},ALL_CATEGORIES.map(c=>e("option",{key:c,value:c},ICONS[c]+" "+c))),
+      e("label",{style:{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginTop:10}},"🛍️ Vendor / App (optional)"),
+      e("select",{value:ven,onChange:ev=>{setVen(ev.target.value);setCat(categorize(desc,ev.target.value,src));},style:{...inp}},[e("option",{key:"none",value:""},"— none —"),...VENDORS.map(v=>e("option",{key:v,value:v},v))]),
       e("label",{style:{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginTop:10}},"💳 Account"),
-      e("select",{value:src,onChange:ev=>setSrc(ev.target.value),style:{...inp}},SOURCES.map(s=>e("option",{key:s.label,value:s.label},s.label))),
+      e("select",{value:src,onChange:ev=>{setSrc(ev.target.value);setCat(categorize(desc,ven,ev.target.value));},style:{...inp}},SOURCES.map(s=>e("option",{key:s.label,value:s.label},s.label))),
       e("div",{style:{display:"flex",gap:10,marginTop:16}},
         e("button",{onClick:onCancel,style:{flex:1,padding:10,background:"#f3f4f6",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer"}},"Cancel"),
         e("button",{onClick:handleSave,disabled:saving,style:{flex:2,padding:10,background:"#1F4E79",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer"}},saving?"Saving…":"Save Changes")
@@ -336,6 +404,9 @@ function MainApp({user,onLogout}) {
   const [newDesc,setNewDesc]   = useState("");
   const [newSrc,setNewSrc]     = useState(() => localStorage.getItem("lastAccount") || SOURCES[0].label);
   const [detectedCat,setDetectedCat] = useState("Miscellaneous");
+  const [newVendor,setNewVendor] = useState("");
+  const [vendorTouched,setVendorTouched] = useState(false);
+  const [vendorRows,setVendorRows] = useState([]);   // all-time rows with a vendor (for wallet balances)
 
   // ── Export/filter
   const [exportFrom,setExportFrom] = useState("");
@@ -363,28 +434,38 @@ function MainApp({user,onLogout}) {
   },[month,year]);
 
   // Update detected category when description changes
-  useEffect(()=>{ setDetectedCat(autoCategory(newDesc)); },[newDesc]);
+  useEffect(()=>{
+    if(!vendorTouched){
+      const v = autoVendor(newDesc) || ACCOUNT_VENDOR[newSrc] || "";
+      setNewVendor(v);
+    }
+  },[newDesc,newSrc,vendorTouched]);
+  useEffect(()=>{ setDetectedCat(categorize(newDesc,newVendor,newSrc)); },[newDesc,newVendor,newSrc]);
 
-  function dayTotal(d){ return rows.filter(r=>r.day===d).reduce((s,r)=>s+(r.amount||0),0); }
+  // Wallet balances need all-time vendor rows; reload after every change
+  const [walletTick,setWalletTick] = useState(0);
+  useEffect(()=>{ dbFetchVendorRows().then(setVendorRows).catch(()=>{}); },[walletTick]);
+
+  function dayTotal(d){ return rows.filter(r=>r.day===d&&isSpend(r)).reduce((s,r)=>s+(r.amount||0),0); }
   const dayRows = useMemo(()=>rows.filter(r=>r.day===activeDay).sort((a,b)=>a.timestamp-b.timestamp),[rows,activeDay]);
 
   // ── ADD ENTRY (3 fields only, category auto-detected)
   async function handleAdd() {
     const amt = parseFloat(newAmt);
     if (!amt||amt<=0||!newDesc.trim()) return;
-    const category = autoCategory(newDesc);
+    const category = categorize(newDesc,newVendor,newSrc);
     const tempId = "temp_"+Date.now()+"_"+Math.random().toString(36).slice(2);
     const row = {
       id: tempId,
       month, year:String(year), day:activeDay,
       note: newDesc.trim(), description: newDesc.trim(),
-      category, source: newSrc,
+      category, source: newSrc, vendor: newVendor,
       amount: amt, enteredBy: user.name,
       timestamp: Date.now(), date: new Date().toISOString(),
     };
     // Optimistic update with temporary id
     setRows(p=>[...p, row]);
-    setNewAmt(""); setNewDesc("");
+    setNewAmt(""); setNewDesc(""); setNewVendor(""); setVendorTouched(false);
     localStorage.setItem("lastAccount", newSrc);
     setSyncStatus("saving");
     try {
@@ -393,7 +474,7 @@ function MainApp({user,onLogout}) {
         // Replace the temporary id with the real Supabase id so delete/edit work correctly
         setRows(p=>p.map(r=>r.id===tempId ? {...r, id: realId} : r));
       }
-      setSyncStatus("saved");
+      setSyncStatus("saved"); setWalletTick(t=>t+1);
     }
     catch(ex) { setErr("Save failed: "+ex.message); setSyncStatus("error"); setRows(p=>p.filter(r=>r.id!==tempId)); }
   }
@@ -402,7 +483,7 @@ function MainApp({user,onLogout}) {
   async function handleDelete(row) {
     setRows(p=>p.filter(r=>r.id!==row.id));
     setSyncStatus("saving");
-    try { await dbDelete(row.id); setSyncStatus("saved"); }
+    try { await dbDelete(row.id); setSyncStatus("saved"); setWalletTick(t=>t+1); }
     catch(ex) { setErr("Delete failed: "+ex.message); setSyncStatus("error"); }
   }
 
@@ -410,7 +491,7 @@ function MainApp({user,onLogout}) {
   async function handleEditSave(id, changes) {
     setRows(p=>p.map(r=>r.id===id?{...r,...changes,source:changes.source}:r));
     setEditRow(null); setSyncStatus("saving");
-    try { await dbUpdate(id, changes); setSyncStatus("saved"); }
+    try { await dbUpdate(id, changes); setSyncStatus("saved"); setWalletTick(t=>t+1); }
     catch(ex) { setErr("Update failed: "+ex.message); setSyncStatus("error"); }
   }
 
@@ -439,11 +520,11 @@ function MainApp({user,onLogout}) {
       const csvSummary = [summaryHeader,...summaryRows].join("\n");
 
       const rawRows = data.sort((a,b)=>new Date(a.date)-new Date(b.date))
-        .map(r=>[r.date?.slice(0,10)||"",r.description||"",r.category,r.source,r.amount||0,r.enteredBy||""].join(","));
-      const rawHeader = ["Date","Description","Category","Account","Amount","Entered By"].join(",");
+        .map(r=>[r.date?.slice(0,10)||"",r.description||"",r.category,r.vendor||"",r.source,r.amount||0,r.enteredBy||""].join(","));
+      const rawHeader = ["Date","Description","Category","Vendor","Account","Amount","Entered By"].join(",");
       const csvRaw = [rawHeader,...rawRows].join("\n");
 
-      const grandTotal = data.reduce((s,r)=>s+(r.amount||0),0);
+      const grandTotal = data.filter(isSpend).reduce((s,r)=>s+(r.amount||0),0);
       await sendEmailReport(csvSummary, csvRaw, month, year, grandTotal);
       setEmailMsg("✅ Sent to "+REPORT_EMAILS.join(" & "));
     } catch(ex) {
@@ -474,8 +555,8 @@ function MainApp({user,onLogout}) {
         csv = [header,...summaryRows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\r\n");
         filename = `SmartExpense_Summary_${exportFrom}_to_${exportTo}.csv`;
       } else {
-        const header = ["Date","Day","Description","Category","Account","Amount","Entered By"];
-        const drows = data.sort((a,b)=>new Date(a.date)-new Date(b.date)).map(r=>[r.date?.slice(0,10)||"",new Date(r.date).getDate(),r.description||"",r.category,r.source,r.amount||0,r.enteredBy||""]);
+        const header = ["Date","Day","Description","Category","Vendor","Account","Amount","Entered By"];
+        const drows = data.sort((a,b)=>new Date(a.date)-new Date(b.date)).map(r=>[r.date?.slice(0,10)||"",new Date(r.date).getDate(),r.description||"",r.category,r.vendor||"",r.source,r.amount||0,r.enteredBy||""]);
         csv = [header,...drows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\r\n");
         filename = `SmartExpense_Raw_${exportFrom}_to_${exportTo}.csv`;
       }
@@ -523,6 +604,23 @@ function MainApp({user,onLogout}) {
     return out;
   },[rows]);
   const fullGrand = useMemo(()=>CATEGORIES.reduce((s,c)=>s+(fullT[c]?.total||0),0),[fullT]);
+
+  const vendorTotals = useMemo(()=>{
+    const m={};
+    rows.filter(r=>isSpend(r)&&r.vendor).forEach(r=>{ m[r.vendor]=m[r.vendor]||{vendor:r.vendor,total:0,count:0}; m[r.vendor].total+=r.amount||0; m[r.vendor].count++; });
+    return Object.values(m).filter(v=>v.total>0).sort((a,b)=>b.total-a.total);
+  },[rows]);
+
+  const walletBalances = useMemo(()=>{
+    const m={};
+    vendorRows.forEach(r=>{
+      if(!WALLET_VENDORS.includes(r.vendor)) return;
+      m[r.vendor]=m[r.vendor]||{vendor:r.vendor,loaded:0,used:0};
+      if(r.category===TRANSFER_CAT) m[r.vendor].loaded+=r.amount;
+      else if(WALLET_ACCOUNTS.includes(r.source)) m[r.vendor].used+=r.amount;
+    });
+    return Object.values(m).filter(w=>w.loaded>0||w.used>0).map(w=>({...w,balance:w.loaded-w.used})).sort((a,b)=>b.loaded-a.loaded);
+  },[vendorRows]);
 
   // ── INSIGHTS (existing logic preserved)
   const insights = useMemo(()=>{
@@ -645,6 +743,16 @@ function MainApp({user,onLogout}) {
             e("span",{style:{fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,background:"#eff6ff",color:"#1F4E79"}},ICONS[detectedCat]+" "+detectedCat)
           ),
 
+          // Vendor / app (auto-detected, can be changed)
+          e("div",{style:{marginBottom:12}},
+            e("label",{style:{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginBottom:4}},"🛍️ Vendor / App"+(newVendor&&!vendorTouched?" (auto)":"")),
+            e("select",{value:newVendor,onChange:ev=>{setNewVendor(ev.target.value);setVendorTouched(true);},
+              style:{width:"100%",padding:"10px 14px",border:"1px solid #e5e7eb",borderRadius:8,fontSize:13,outline:"none",boxSizing:"border-box"}},
+              [e("option",{key:"none",value:""},"— none —"),...VENDORS.map(v=>e("option",{key:v,value:v},v))])
+          ),
+          detectedCat===TRANSFER_CAT&&e("div",{style:{marginBottom:12,fontSize:11,color:"#92400e",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"8px 10px",lineHeight:1.5}},
+            "🔁 This is a wallet/voucher load — it will NOT count as spending. Log each order you place from this wallet separately (account: Store Wallet)."),
+
           // Account (default = last used)
           e("div",{style:{marginBottom:14}},
             e("label",{style:{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginBottom:4}},"💳 Account"),
@@ -662,7 +770,7 @@ function MainApp({user,onLogout}) {
         e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
           e("div",{style:{fontSize:12,fontWeight:700,color:"#1F4E79",marginBottom:dayRows.length>0?10:0}},
             "Day "+activeDay+" Entries",
-            dayRows.length>0&&e("span",{style:{marginLeft:8,fontSize:11,color:"#6b7280",fontWeight:400}},dayRows.length+" · "+fmt(dayTotal(activeDay)))
+            dayRows.length>0&&e("span",{style:{marginLeft:8,fontSize:11,color:"#6b7280",fontWeight:400}},dayRows.length+" · "+fmt(dayTotal(activeDay))+(dayRows.some(r=>!isSpend(r))?" (loads excluded)":""))
           ),
           dayRows.length===0
             ?e("div",{style:{fontSize:11,color:"#9ca3af",fontStyle:"italic",textAlign:"center",padding:"16px 0"}},"No entries yet. Add above.")
@@ -672,12 +780,13 @@ function MainApp({user,onLogout}) {
                 e("div",{style:{flex:1,minWidth:0}},
                   e("div",{style:{fontSize:12,fontWeight:600,color:"#111",marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},row.description||row.note||"—"),
                   e("div",{style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}},
-                    e("span",{style:{fontSize:10,padding:"1px 7px",borderRadius:20,background:"#f0fdf4",color:"#166534",border:"1px solid #bbf7d0"}},ICONS[row.category]+" "+row.category),
+                    e("span",{style:{fontSize:10,padding:"1px 7px",borderRadius:20,background:row.category===TRANSFER_CAT?"#fffbeb":"#f0fdf4",color:row.category===TRANSFER_CAT?"#92400e":"#166534",border:"1px solid "+(row.category===TRANSFER_CAT?"#fde68a":"#bbf7d0")}},ICONS[row.category]+" "+row.category),
+                    row.vendor&&e("span",{style:{fontSize:10,padding:"1px 7px",borderRadius:20,background:"#f5f3ff",color:"#5b21b6",border:"1px solid #ddd6fe"}},"🛍️ "+row.vendor),
                     e("span",{style:{fontSize:10,padding:"1px 7px",borderRadius:20,background:src?.light||"#f3f4f6",color:src?.color||"#666",fontWeight:600}},row.source),
                     e("span",{style:{fontSize:9,color:"#9ca3af"}},"tap to edit")
                   )
                 ),
-                e("div",{style:{fontSize:14,fontWeight:800,color:src?.color||"#111",minWidth:65,textAlign:"right"}},"₹"+fmtN(row.amount)),
+                e("div",{style:{fontSize:14,fontWeight:800,color:row.category===TRANSFER_CAT?"#9ca3af":(src?.color||"#111"),minWidth:65,textAlign:"right"}},"₹"+fmtN(row.amount)),
                 e("button",{onClick:ev=>{ev.stopPropagation();handleDelete(row);},style:{background:"#fee2e2",border:"none",color:"#dc2626",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer",fontWeight:700}},"✕")
               );
             })
@@ -732,7 +841,7 @@ function MainApp({user,onLogout}) {
         e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
           e("div",{style:{fontSize:13,fontWeight:700,color:"#1F4E79",marginBottom:12}},"💳 Spend by Account"),
           e("div",{style:{display:"flex",flexWrap:"wrap",gap:8}},
-            SOURCES.map(s=>{const amt=rows.reduce((a,r)=>a+(r.source===s.label?r.amount||0:0),0);if(!amt)return null;const pct=fullGrand>0?(amt/fullGrand*100).toFixed(0):0;
+            SOURCES.map(s=>{const amt=rows.reduce((a,r)=>a+(r.source===s.label&&isSpend(r)?r.amount||0:0),0);if(!amt)return null;const pct=fullGrand>0?(amt/fullGrand*100).toFixed(0):0;
               return e("div",{key:s.label,style:{flex:"1 1 100px",padding:"10px 12px",borderRadius:10,background:s.light,border:"1px solid "+s.color+"33",textAlign:"center"}},
                 e("div",{style:{fontSize:10,fontWeight:700,color:s.color}},s.label),
                 e("div",{style:{fontSize:15,fontWeight:800,color:s.color,margin:"3px 0"}},fmt(amt)),
@@ -741,6 +850,29 @@ function MainApp({user,onLogout}) {
             }),
             fullGrand===0&&e("div",{style:{fontSize:11,color:"#9ca3af",fontStyle:"italic"}},"No expenses yet.")
           )
+        ),
+
+        // Spend by vendor (this month, loads excluded)
+        e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
+          e("div",{style:{fontSize:13,fontWeight:700,color:"#1F4E79",marginBottom:4}},"🛍️ Spend by Vendor / App"),
+          e("div",{style:{fontSize:10,color:"#9ca3af",marginBottom:12}},"This month · wallet loads not counted"),
+          vendorTotals.length===0?e("div",{style:{fontSize:11,color:"#9ca3af",fontStyle:"italic"}},"No vendor entries yet."):
+          vendorTotals.map((v,i)=>e("div",{key:v.vendor,style:{marginBottom:10}},
+            e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:3}},
+              e("span",{style:{fontSize:11,fontWeight:i<3?700:500,color:i<3?"#5b21b6":"#374151"}},v.vendor+" · "+v.count+" entr"+(v.count===1?"y":"ies")),
+              e("span",{style:{fontSize:12,fontWeight:700}},fmt(v.total)+(fullGrand>0?" ("+(v.total/fullGrand*100).toFixed(0)+"%)":""))),
+            e("div",{style:{height:7,background:"#f3f4f6",borderRadius:4,overflow:"hidden"}},e("div",{style:{width:(v.total/vendorTotals[0].total*100)+"%",height:"100%",background:i===0?"#7c3aed":"#a78bfa",borderRadius:4}}))
+          ))
+        ),
+
+        // Wallet balances (all time, since vendor tracking began)
+        walletBalances.length>0&&e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
+          e("div",{style:{fontSize:13,fontWeight:700,color:"#1F4E79",marginBottom:4}},"🔁 Wallet / Voucher Balances"),
+          e("div",{style:{fontSize:10,color:"#9ca3af",marginBottom:12}},"Loaded minus orders logged from the wallet (since you started logging vendors). A balance that keeps growing usually means orders are not being logged."),
+          walletBalances.map(w=>e("div",{key:w.vendor,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f3f4f6"}},
+            e("div",null,e("div",{style:{fontSize:12,fontWeight:700,color:"#111"}},w.vendor),e("div",{style:{fontSize:10,color:"#6b7280"}},"Loaded "+fmt(w.loaded)+" · Used "+fmt(w.used))),
+            e("div",{style:{fontSize:14,fontWeight:800,color:w.balance<0?"#dc2626":"#16a34a"}},(w.balance<0?"-":"")+"₹"+fmtN(Math.abs(w.balance)))
+          ))
         )
       ),
 
