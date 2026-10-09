@@ -36,7 +36,7 @@ const CATEGORIES = [
   "Household Help (Maid/Cook/Driver)","Restaurants",
   "Medical & Pharmacy","Transport & Fuel","Taxi / Auto","Gym","Shopping & Clothing",
   "Subscriptions (OTT/Internet)","Toiletries & Cleaning Supplies","Gardening","Gifts",
-  "Wallet / FASTag Recharge","Entertainment","Laundry",
+  "Wallet / FASTag Recharge","Vouchers & Wallet Loads","Entertainment","Laundry",
   "Personal Care & Grooming","Travel & Holidays","Jewellery & Valuables",
   "Legal & Documentation","Household & Misc","One-Time / Extra Expenses","Miscellaneous"
 ];
@@ -49,10 +49,11 @@ const SOURCES = [
   { label:"Cash / UPI",   color:"#C65911", light:"#FCE4D6" },
   { label:"BBDaily",      color:"#6C3483", light:"#E8DAEF" },
   { label:"Akshayakalpa", color:"#117A65", light:"#D1F2EB" },
-  { label:"Store Wallet", color:"#B03A2E", light:"#F9E0DD" }
+  { label:"Voucher Balance", color:"#B03A2E", light:"#F9E0DD" }
 ];
 // Accounts that are prepaid store wallets (money already loaded earlier)
-const WALLET_ACCOUNTS = ["BBDaily","Akshayakalpa","Store Wallet"];
+const WALLET_ACCOUNTS = ["BBDaily","Akshayakalpa","Voucher Balance"];
+const SPEND_SOURCES = SOURCES.filter(x=>!WALLET_ACCOUNTS.includes(x.label));   // accounts that count toward monthly spend
 const ACCOUNT_VENDOR = { "BBDaily":"BigBasket", "Akshayakalpa":"Akshayakalpa" };
 const ICONS = {
   "Groceries & Vegetables":"🥦","Kids Activities & School":"🎒","Utilities (Electricity/Water/Gas)":"💡",
@@ -61,14 +62,15 @@ const ICONS = {
   "Shopping & Clothing":"👗","Subscriptions (OTT/Internet)":"📱","Toiletries & Cleaning Supplies":"🧴",
   "Gardening":"🌿","Gifts":"🎁","Wallet / FASTag Recharge":"💳","Entertainment":"🎬","Laundry":"👕",
   "Personal Care & Grooming":"💅","Travel & Holidays":"✈️","Jewellery & Valuables":"💎",
-  "Legal & Documentation":"📄","Household & Misc":"📦","One-Time / Extra Expenses":"⚡","Miscellaneous":"❔",
-  "Wallet / Voucher Load (not spend)":"🔁"
+  "Legal & Documentation":"📄","Household & Misc":"📦","One-Time / Extra Expenses":"⚡","Miscellaneous":"❔","Vouchers & Wallet Loads":"🎟️"
 };
-// Money moved into a store wallet/voucher. NOT counted as spending — the real
-// spend is logged later, order by order, when the wallet is used.
-const TRANSFER_CAT = "Wallet / Voucher Load (not spend)";
-const ALL_CATEGORIES = [...CATEGORIES, TRANSFER_CAT];
-const isSpend = r => r.category !== TRANSFER_CAT;
+// Buying a voucher / loading a wallet IS monthly spending (it is what hits the card bill).
+// Orders PAID FROM a voucher balance (account = a wallet account) are tracked for category/vendor
+// analysis but are NOT counted in the monthly total, so nothing is counted twice.
+const LOAD_CAT = "Vouchers & Wallet Loads";
+const ALL_CATEGORIES = CATEGORIES;
+function rowType(r){ return !WALLET_ACCOUNTS.includes(r.source) ? (r.category===LOAD_CAT ? "Voucher purchase / load" : "Direct spend") : "Paid from voucher"; }
+const isSpend = r => !WALLET_ACCOUNTS.includes(r.source);   // true = counts toward monthly total
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DIM = {January:31,February:28,March:31,April:30,May:31,June:30,July:31,August:31,September:30,October:31,November:30,December:31};
 
@@ -145,7 +147,7 @@ function isLoadEntry(description, vendor, source) {
 // Platform names are stripped so the ITEM decides the category ("zepto pencils" -> school, not groceries)
 const PLATFORM_WORDS = ["swiggy instamart","instamart","zepto","blinkit","bigbasket","big basket","bbnow","firstclub","first club","dmart","d mart","amazon","flipkart"];
 function categorize(description, vendor, source) {
-  if (isLoadEntry(description, vendor, source)) return TRANSFER_CAT;
+  if (isLoadEntry(description, vendor, source)) return LOAD_CAT;
   let d = (description || "").toLowerCase();
   if (vendor && vendor !== "Swiggy/Zomato" && vendor !== "Myntra") PLATFORM_WORDS.forEach(w => { d = d.split(w).join(" "); });
   else if (vendor === "Swiggy/Zomato") { /* keep: food apps are Restaurants */ }
@@ -508,20 +510,22 @@ function MainApp({user,onLogout}) {
       const data = await dbFetchRange(exportFrom+"T00:00:00", exportTo+"T23:59:59");
       if (data.length===0) { setEmailMsg("No data in this range."); setEmailSending(false); return; }
       const summaryRows = CATEGORIES.map(cat=>{
-        const catRows = data.filter(r=>r.category===cat);
-        if(catRows.length===0) return null;
+        const catAll = data.filter(r=>r.category===cat);
+        if(catAll.length===0) return null;
+        const catRows = catAll.filter(isSpend);
         const total = catRows.reduce((s,r)=>s+(r.amount||0),0);
+        const viaVoucher = catAll.filter(r=>!isSpend(r)).reduce((s,r)=>s+(r.amount||0),0);
         const bySrc = {};
-        SOURCES.forEach(s=>{ bySrc[s.label]=catRows.filter(r=>r.source===s.label).reduce((a,r)=>a+(r.amount||0),0); });
+        SPEND_SOURCES.forEach(s=>{ bySrc[s.label]=catRows.filter(r=>r.source===s.label).reduce((a,r)=>a+(r.amount||0),0); });
         const budget = parseFloat(budgets[cat])||0;
-        return [cat,...SOURCES.map(s=>bySrc[s.label]||0),total,budget,budget>0?total-budget:""].join(",");
+        return [cat,...SPEND_SOURCES.map(s=>bySrc[s.label]||0),total,budget,budget>0?total-budget:"",viaVoucher].join(",");
       }).filter(Boolean);
-      const summaryHeader = ["Category",...SOURCES.map(s=>s.label),"Total","Budget","Variance"].join(",");
+      const summaryHeader = ["Category",...SPEND_SOURCES.map(s=>s.label),"Total","Budget","Variance","Paid from Voucher (not counted)"].join(",");
       const csvSummary = [summaryHeader,...summaryRows].join("\n");
 
       const rawRows = data.sort((a,b)=>new Date(a.date)-new Date(b.date))
-        .map(r=>[r.date?.slice(0,10)||"",r.description||"",r.category,r.vendor||"",r.source,r.amount||0,r.enteredBy||""].join(","));
-      const rawHeader = ["Date","Description","Category","Vendor","Account","Amount","Entered By"].join(",");
+        .map(r=>[r.date?.slice(0,10)||"",r.description||"",r.category,r.vendor||"",r.source,isSpend(r)?(r.amount||0):0,isSpend(r)?0:(r.amount||0),rowType(r),r.enteredBy||""].join(","));
+      const rawHeader = ["Date","Description","Category","Vendor","Account","Amount (counted)","Paid from Voucher (not counted)","Type","Entered By"].join(",");
       const csvRaw = [rawHeader,...rawRows].join("\n");
 
       const grandTotal = data.filter(isSpend).reduce((s,r)=>s+(r.amount||0),0);
@@ -543,20 +547,22 @@ function MainApp({user,onLogout}) {
       let csv, filename;
       if (type==="summary") {
         const summaryRows = CATEGORIES.map(cat=>{
-          const catRows = data.filter(r=>r.category===cat);
-          if(catRows.length===0) return null;
+          const catAll = data.filter(r=>r.category===cat);
+          if(catAll.length===0) return null;
+          const catRows = catAll.filter(isSpend);
           const total = catRows.reduce((s,r)=>s+(r.amount||0),0);
+          const viaVoucher = catAll.filter(r=>!isSpend(r)).reduce((s,r)=>s+(r.amount||0),0);
           const bySrc = {};
-          SOURCES.forEach(s=>{ bySrc[s.label]=catRows.filter(r=>r.source===s.label).reduce((a,r)=>a+(r.amount||0),0); });
+          SPEND_SOURCES.forEach(s=>{ bySrc[s.label]=catRows.filter(r=>r.source===s.label).reduce((a,r)=>a+(r.amount||0),0); });
           const budget = parseFloat(budgets[cat])||0;
-          return [cat,...SOURCES.map(s=>bySrc[s.label]||0),total,budget,budget>0?total-budget:""];
+          return [cat,...SPEND_SOURCES.map(s=>bySrc[s.label]||0),total,budget,budget>0?total-budget:"",viaVoucher];
         }).filter(Boolean);
-        const header = ["Category",...SOURCES.map(s=>s.label),"Total","Budget","Variance"];
+        const header = ["Category",...SPEND_SOURCES.map(s=>s.label),"Total","Budget","Variance","Paid from Voucher (not counted)"];
         csv = [header,...summaryRows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\r\n");
         filename = `SmartExpense_Summary_${exportFrom}_to_${exportTo}.csv`;
       } else {
-        const header = ["Date","Day","Description","Category","Vendor","Account","Amount","Entered By"];
-        const drows = data.sort((a,b)=>new Date(a.date)-new Date(b.date)).map(r=>[r.date?.slice(0,10)||"",new Date(r.date).getDate(),r.description||"",r.category,r.vendor||"",r.source,r.amount||0,r.enteredBy||""]);
+        const header = ["Date","Day","Description","Category","Vendor","Account","Amount (counted)","Paid from Voucher (not counted)","Type","Entered By"];
+        const drows = data.sort((a,b)=>new Date(a.date)-new Date(b.date)).map(r=>[r.date?.slice(0,10)||"",new Date(r.date).getDate(),r.description||"",r.category,r.vendor||"",r.source,isSpend(r)?(r.amount||0):0,isSpend(r)?0:(r.amount||0),rowType(r),r.enteredBy||""]);
         csv = [header,...drows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\r\n");
         filename = `SmartExpense_Raw_${exportFrom}_to_${exportTo}.csv`;
       }
@@ -570,11 +576,11 @@ function MainApp({user,onLogout}) {
 
   // ── CALCULATIONS (all existing logic preserved)
   const catT = useMemo(()=>{
-    const fil = rows.filter(r=>r.day>=rf&&r.day<=rt);
+    const fil = rows.filter(r=>r.day>=rf&&r.day<=rt&&isSpend(r));
     const out={};
     for(const cat of CATEGORIES){
       out[cat]={total:0,bySrc:{}};
-      for(const{label}of SOURCES){
+      for(const{label}of SPEND_SOURCES){
         const s=fil.filter(r=>r.category===cat&&r.source===label).reduce((a,r)=>a+(r.amount||0),0);
         out[cat].bySrc[label]=s; out[cat].total+=s;
       }
@@ -584,7 +590,7 @@ function MainApp({user,onLogout}) {
 
   const srcT = useMemo(()=>{
     const out={};
-    for(const{label}of SOURCES) out[label]=CATEGORIES.reduce((s,c)=>s+(catT[c]?.bySrc[label]||0),0);
+    for(const{label}of SPEND_SOURCES) out[label]=CATEGORIES.reduce((s,c)=>s+(catT[c]?.bySrc[label]||0),0);
     return out;
   },[catT]);
 
@@ -596,7 +602,7 @@ function MainApp({user,onLogout}) {
     const out={};
     for(const cat of CATEGORIES){
       out[cat]={total:0,bySrc:{}};
-      for(const{label}of SOURCES){
+      for(const{label}of SPEND_SOURCES){
         const s=rows.filter(r=>r.category===cat&&r.source===label).reduce((a,r)=>a+(r.amount||0),0);
         out[cat].bySrc[label]=s; out[cat].total+=s;
       }
@@ -607,16 +613,33 @@ function MainApp({user,onLogout}) {
 
   const vendorTotals = useMemo(()=>{
     const m={};
-    rows.filter(r=>isSpend(r)&&r.vendor).forEach(r=>{ m[r.vendor]=m[r.vendor]||{vendor:r.vendor,total:0,count:0}; m[r.vendor].total+=r.amount||0; m[r.vendor].count++; });
-    return Object.values(m).filter(v=>v.total>0).sort((a,b)=>b.total-a.total);
+    rows.filter(r=>r.vendor).forEach(r=>{
+      const v=m[r.vendor]=m[r.vendor]||{vendor:r.vendor,total:0,count:0,loaded:0,ordered:0};
+      if(isSpend(r)){ v.total+=r.amount||0; v.count++; if(r.category===LOAD_CAT) v.loaded+=r.amount||0; }
+      else v.ordered+=r.amount||0;
+    });
+    return Object.values(m).filter(v=>v.total>0||v.ordered>0).sort((a,b)=>b.total-a.total||b.ordered-a.ordered);
   },[rows]);
+
+  // Orders paid from voucher balances this month (info only)
+  const voucherRows = useMemo(()=>rows.filter(r=>!isSpend(r)),[rows]);
+  const voucherByCat = useMemo(()=>{
+    const m={}; voucherRows.forEach(r=>{ m[r.category]=(m[r.category]||0)+(r.amount||0); });
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  },[voucherRows]);
+  const voucherByVendor = useMemo(()=>{
+    const m={}; voucherRows.forEach(r=>{ const k=r.vendor||ACCOUNT_VENDOR[r.source]||"Unspecified"; m[k]=(m[k]||0)+(r.amount||0); });
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  },[voucherRows]);
+  const loadsThisMonth = useMemo(()=>rows.filter(r=>r.category===LOAD_CAT&&isSpend(r)).reduce((a,r)=>a+(r.amount||0),0),[rows]);
+  const voucherSpentThisMonth = useMemo(()=>voucherRows.reduce((a,r)=>a+(r.amount||0),0),[voucherRows]);
 
   const walletBalances = useMemo(()=>{
     const m={};
     vendorRows.forEach(r=>{
       if(!WALLET_VENDORS.includes(r.vendor)) return;
       m[r.vendor]=m[r.vendor]||{vendor:r.vendor,loaded:0,used:0};
-      if(r.category===TRANSFER_CAT) m[r.vendor].loaded+=r.amount;
+      if(r.category===LOAD_CAT && !WALLET_ACCOUNTS.includes(r.source)) m[r.vendor].loaded+=r.amount;
       else if(WALLET_ACCOUNTS.includes(r.source)) m[r.vendor].used+=r.amount;
     });
     return Object.values(m).filter(w=>w.loaded>0||w.used>0).map(w=>({...w,balance:w.loaded-w.used})).sort((a,b)=>b.loaded-a.loaded);
@@ -684,7 +707,7 @@ function MainApp({user,onLogout}) {
         )
       ),
       e("div",{style:{display:"flex",gap:1,padding:"0 8px",overflowX:"auto",WebkitOverflowScrolling:"touch"}},
-        ["entry","dashboard","summary","export","budget"].map(t=>e("button",{key:t,onClick:()=>setTab(t),style:{padding:"7px 11px",borderRadius:"7px 7px 0 0",border:"none",cursor:"pointer",fontSize:11,fontWeight:600,whiteSpace:"nowrap",background:tab===t?"#f0f4f8":"transparent",color:tab===t?"#1F4E79":"rgba(255,255,255,0.7)"}},{"entry":"📝 Entry","dashboard":"🎯 Dashboard","summary":"📊 Summary","export":"📥 Export","budget":"🎯 Budget"}[t]))
+        ["entry","dashboard","vouchers","summary","export","budget"].map(t=>e("button",{key:t,onClick:()=>setTab(t),style:{padding:"7px 11px",borderRadius:"7px 7px 0 0",border:"none",cursor:"pointer",fontSize:11,fontWeight:600,whiteSpace:"nowrap",background:tab===t?"#f0f4f8":"transparent",color:tab===t?"#1F4E79":"rgba(255,255,255,0.7)"}},{"entry":"📝 Entry","dashboard":"🎯 Dashboard","vouchers":"🎟️ Vouchers","summary":"📊 Summary","export":"📥 Export","budget":"🎯 Budget"}[t]))
       )
     ),
 
@@ -750,8 +773,10 @@ function MainApp({user,onLogout}) {
               style:{width:"100%",padding:"10px 14px",border:"1px solid #e5e7eb",borderRadius:8,fontSize:13,outline:"none",boxSizing:"border-box"}},
               [e("option",{key:"none",value:""},"— none —"),...VENDORS.map(v=>e("option",{key:v,value:v},v))])
           ),
-          detectedCat===TRANSFER_CAT&&e("div",{style:{marginBottom:12,fontSize:11,color:"#92400e",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"8px 10px",lineHeight:1.5}},
-            "🔁 This is a wallet/voucher load — it will NOT count as spending. Log each order you place from this wallet separately (account: Store Wallet)."),
+          detectedCat===LOAD_CAT&&!WALLET_ACCOUNTS.includes(newSrc)&&e("div",{style:{marginBottom:12,fontSize:11,color:"#92400e",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"8px 10px",lineHeight:1.5}},
+            "🎟️ Voucher / wallet purchase — counts in this month's spending. Log the orders you place from it later with account “Voucher Balance”."),
+          WALLET_ACCOUNTS.includes(newSrc)&&e("div",{style:{marginBottom:12,fontSize:11,color:"#065f46",background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:8,padding:"8px 10px",lineHeight:1.5}},
+            "✅ Paid from voucher balance — tracked by category and vendor, but NOT added to the monthly total (the voucher purchase already counted)."),
 
           // Account (default = last used)
           e("div",{style:{marginBottom:14}},
@@ -770,7 +795,7 @@ function MainApp({user,onLogout}) {
         e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
           e("div",{style:{fontSize:12,fontWeight:700,color:"#1F4E79",marginBottom:dayRows.length>0?10:0}},
             "Day "+activeDay+" Entries",
-            dayRows.length>0&&e("span",{style:{marginLeft:8,fontSize:11,color:"#6b7280",fontWeight:400}},dayRows.length+" · "+fmt(dayTotal(activeDay))+(dayRows.some(r=>!isSpend(r))?" (loads excluded)":""))
+            dayRows.length>0&&e("span",{style:{marginLeft:8,fontSize:11,color:"#6b7280",fontWeight:400}},dayRows.length+" · "+fmt(dayTotal(activeDay))+(dayRows.some(r=>!isSpend(r))?" (voucher spend excluded)":""))
           ),
           dayRows.length===0
             ?e("div",{style:{fontSize:11,color:"#9ca3af",fontStyle:"italic",textAlign:"center",padding:"16px 0"}},"No entries yet. Add above.")
@@ -780,13 +805,13 @@ function MainApp({user,onLogout}) {
                 e("div",{style:{flex:1,minWidth:0}},
                   e("div",{style:{fontSize:12,fontWeight:600,color:"#111",marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},row.description||row.note||"—"),
                   e("div",{style:{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}},
-                    e("span",{style:{fontSize:10,padding:"1px 7px",borderRadius:20,background:row.category===TRANSFER_CAT?"#fffbeb":"#f0fdf4",color:row.category===TRANSFER_CAT?"#92400e":"#166534",border:"1px solid "+(row.category===TRANSFER_CAT?"#fde68a":"#bbf7d0")}},ICONS[row.category]+" "+row.category),
+                    e("span",{style:{fontSize:10,padding:"1px 7px",borderRadius:20,background:!isSpend(row)?"#ecfdf5":"#f0fdf4",color:!isSpend(row)?"#065f46":"#166534",border:"1px solid "+(!isSpend(row)?"#a7f3d0":"#bbf7d0")}},ICONS[row.category]+" "+row.category),
                     row.vendor&&e("span",{style:{fontSize:10,padding:"1px 7px",borderRadius:20,background:"#f5f3ff",color:"#5b21b6",border:"1px solid #ddd6fe"}},"🛍️ "+row.vendor),
                     e("span",{style:{fontSize:10,padding:"1px 7px",borderRadius:20,background:src?.light||"#f3f4f6",color:src?.color||"#666",fontWeight:600}},row.source),
                     e("span",{style:{fontSize:9,color:"#9ca3af"}},"tap to edit")
                   )
                 ),
-                e("div",{style:{fontSize:14,fontWeight:800,color:row.category===TRANSFER_CAT?"#9ca3af":(src?.color||"#111"),minWidth:65,textAlign:"right"}},"₹"+fmtN(row.amount)),
+                e("div",{style:{fontSize:14,fontWeight:800,color:!isSpend(row)?"#9ca3af":(src?.color||"#111"),minWidth:65,textAlign:"right"}},"₹"+fmtN(row.amount)),
                 e("button",{onClick:ev=>{ev.stopPropagation();handleDelete(row);},style:{background:"#fee2e2",border:"none",color:"#dc2626",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer",fontWeight:700}},"✕")
               );
             })
@@ -841,7 +866,7 @@ function MainApp({user,onLogout}) {
         e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
           e("div",{style:{fontSize:13,fontWeight:700,color:"#1F4E79",marginBottom:12}},"💳 Spend by Account"),
           e("div",{style:{display:"flex",flexWrap:"wrap",gap:8}},
-            SOURCES.map(s=>{const amt=rows.reduce((a,r)=>a+(r.source===s.label&&isSpend(r)?r.amount||0:0),0);if(!amt)return null;const pct=fullGrand>0?(amt/fullGrand*100).toFixed(0):0;
+            SPEND_SOURCES.map(s=>{const amt=rows.reduce((a,r)=>a+(r.source===s.label?r.amount||0:0),0);if(!amt)return null;const pct=fullGrand>0?(amt/fullGrand*100).toFixed(0):0;
               return e("div",{key:s.label,style:{flex:"1 1 100px",padding:"10px 12px",borderRadius:10,background:s.light,border:"1px solid "+s.color+"33",textAlign:"center"}},
                 e("div",{style:{fontSize:10,fontWeight:700,color:s.color}},s.label),
                 e("div",{style:{fontSize:15,fontWeight:800,color:s.color,margin:"3px 0"}},fmt(amt)),
@@ -852,25 +877,49 @@ function MainApp({user,onLogout}) {
           )
         ),
 
-        // Spend by vendor (this month, loads excluded)
+        // Spend by vendor (this month)
         e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
           e("div",{style:{fontSize:13,fontWeight:700,color:"#1F4E79",marginBottom:4}},"🛍️ Spend by Vendor / App"),
-          e("div",{style:{fontSize:10,color:"#9ca3af",marginBottom:12}},"This month · wallet loads not counted"),
+          e("div",{style:{fontSize:10,color:"#9ca3af",marginBottom:12}},"This month · money paid (voucher purchases included). Orders placed from vouchers are shown underneath, not added."),
           vendorTotals.length===0?e("div",{style:{fontSize:11,color:"#9ca3af",fontStyle:"italic"}},"No vendor entries yet."):
           vendorTotals.map((v,i)=>e("div",{key:v.vendor,style:{marginBottom:10}},
             e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:3}},
-              e("span",{style:{fontSize:11,fontWeight:i<3?700:500,color:i<3?"#5b21b6":"#374151"}},v.vendor+" · "+v.count+" entr"+(v.count===1?"y":"ies")),
-              e("span",{style:{fontSize:12,fontWeight:700}},fmt(v.total)+(fullGrand>0?" ("+(v.total/fullGrand*100).toFixed(0)+"%)":""))),
-            e("div",{style:{height:7,background:"#f3f4f6",borderRadius:4,overflow:"hidden"}},e("div",{style:{width:(v.total/vendorTotals[0].total*100)+"%",height:"100%",background:i===0?"#7c3aed":"#a78bfa",borderRadius:4}}))
+              e("span",{style:{fontSize:11,fontWeight:i<3?700:500,color:i<3?"#5b21b6":"#374151"}},v.vendor),
+              e("span",{style:{fontSize:12,fontWeight:700}},fmt(v.total)+(fullGrand>0&&v.total>0?" ("+(v.total/fullGrand*100).toFixed(0)+"%)":""))),
+            e("div",{style:{height:7,background:"#f3f4f6",borderRadius:4,overflow:"hidden"}},e("div",{style:{width:(vendorTotals[0].total>0?v.total/vendorTotals[0].total*100:0)+"%",height:"100%",background:i===0?"#7c3aed":"#a78bfa",borderRadius:4}})),
+            (v.loaded>0||v.ordered>0)&&e("div",{style:{fontSize:10,color:"#6b7280",marginTop:3}},(v.loaded>0?"Voucher purchased "+fmt(v.loaded):"")+(v.loaded>0&&v.ordered>0?" · ":"")+(v.ordered>0?"Ordered from voucher "+fmt(v.ordered):""))
+          ))
+        )
+      ),
+
+      // ── VOUCHERS TAB ──
+      tab==="vouchers"&&e("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+        e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
+          [{label:"Vouchers bought (counted)",val:fmt(loadsThisMonth),color:"#92400e"},{label:"Spent from vouchers (not counted)",val:fmt(voucherSpentThisMonth),color:"#065f46"}]
+          .map((k,i)=>e("div",{key:i,style:{background:"#fff",borderRadius:10,padding:"12px 8px",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",textAlign:"center"}},
+            e("div",{style:{fontSize:16,fontWeight:800,color:k.color}},k.val),
+            e("div",{style:{fontSize:9,color:"#9ca3af",marginTop:3,textTransform:"uppercase"}},k.label)))
+        ),
+        e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
+          e("div",{style:{fontSize:13,fontWeight:700,color:"#1F4E79",marginBottom:4}},"🧾 Where voucher money went — by category"),
+          e("div",{style:{fontSize:10,color:"#9ca3af",marginBottom:12}},month+" · information only, already counted when the voucher was bought"),
+          voucherByCat.length===0?e("div",{style:{fontSize:11,color:"#9ca3af",fontStyle:"italic"}},"No orders from vouchers yet. Log an order with account “Voucher Balance”."):
+          voucherByCat.map(([cat,amt],i)=>e("div",{key:cat,style:{marginBottom:10}},
+            e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:3}},e("span",{style:{fontSize:11,fontWeight:i<3?700:500}},(ICONS[cat]||"")+" "+cat),e("span",{style:{fontSize:12,fontWeight:700}},fmt(amt))),
+            e("div",{style:{height:7,background:"#f3f4f6",borderRadius:4,overflow:"hidden"}},e("div",{style:{width:(amt/voucherByCat[0][1]*100)+"%",height:"100%",background:"#10b981",borderRadius:4}}))
           ))
         ),
-
-        // Wallet balances (all time, since vendor tracking began)
-        walletBalances.length>0&&e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
-          e("div",{style:{fontSize:13,fontWeight:700,color:"#1F4E79",marginBottom:4}},"🔁 Wallet / Voucher Balances"),
-          e("div",{style:{fontSize:10,color:"#9ca3af",marginBottom:12}},"Loaded minus orders logged from the wallet (since you started logging vendors). A balance that keeps growing usually means orders are not being logged."),
+        e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
+          e("div",{style:{fontSize:13,fontWeight:700,color:"#1F4E79",marginBottom:12}},"🛍️ Voucher spend by vendor"),
+          voucherByVendor.length===0?e("div",{style:{fontSize:11,color:"#9ca3af",fontStyle:"italic"}},"Nothing yet."):
+          voucherByVendor.map(([v,amt])=>e("div",{key:v,style:{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f3f4f6",fontSize:12}},e("span",null,v),e("span",{style:{fontWeight:700}},fmt(amt))))
+        ),
+        e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
+          e("div",{style:{fontSize:13,fontWeight:700,color:"#1F4E79",marginBottom:4}},"💰 Voucher / Wallet Balances"),
+          e("div",{style:{fontSize:10,color:"#9ca3af",marginBottom:12}},"Bought minus used, since you started logging vendors. A balance that keeps growing usually means orders are not being logged."),
+          walletBalances.length===0?e("div",{style:{fontSize:11,color:"#9ca3af",fontStyle:"italic"}},"No voucher purchases logged yet."):
           walletBalances.map(w=>e("div",{key:w.vendor,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f3f4f6"}},
-            e("div",null,e("div",{style:{fontSize:12,fontWeight:700,color:"#111"}},w.vendor),e("div",{style:{fontSize:10,color:"#6b7280"}},"Loaded "+fmt(w.loaded)+" · Used "+fmt(w.used))),
+            e("div",null,e("div",{style:{fontSize:12,fontWeight:700}},w.vendor),e("div",{style:{fontSize:10,color:"#6b7280"}},"Bought "+fmt(w.loaded)+" · Used "+fmt(w.used))),
             e("div",{style:{fontSize:14,fontWeight:800,color:w.balance<0?"#dc2626":"#16a34a"}},(w.balance<0?"-":"")+"₹"+fmtN(Math.abs(w.balance)))
           ))
         )
@@ -893,7 +942,7 @@ function MainApp({user,onLogout}) {
             e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
               e("thead",null,e("tr",null,
                 e("th",{style:{padding:"9px 14px",textAlign:"left",background:"#1F4E79",color:"#fff",position:"sticky",left:0,minWidth:180,fontWeight:700}},"Category"),
-                SOURCES.map(s=>e("th",{key:s.label,style:{padding:"9px 5px",textAlign:"center",background:s.color,color:"#fff",fontWeight:700,minWidth:75,fontSize:10}},s.label)),
+                SPEND_SOURCES.map(s=>e("th",{key:s.label,style:{padding:"9px 5px",textAlign:"center",background:s.color,color:"#fff",fontWeight:700,minWidth:75,fontSize:10}},s.label)),
                 e("th",{style:{padding:"9px 7px",textAlign:"center",background:"#0d2847",color:"#fff",fontWeight:700,minWidth:75}},"Total"),
                 e("th",{style:{padding:"9px 7px",textAlign:"center",background:"#374151",color:"#fff",fontWeight:700,minWidth:75}},"Budget"),
                 e("th",{style:{padding:"9px 7px",textAlign:"center",background:"#7B2C2C",color:"#fff",fontWeight:700,minWidth:75}},"Variance")
@@ -903,7 +952,7 @@ function MainApp({user,onLogout}) {
                   const row=catT[cat],bud=parseFloat(budgets[cat])||0,variance=bud>0?row.total-bud:null,over=variance!==null&&variance>0,alt=ci%2===0?"#f8faff":"#fff";
                   return e("tr",{key:cat,style:{background:alt}},
                     e("td",{style:{padding:"7px 14px",fontWeight:500,color:"#1F4E79",position:"sticky",left:0,background:ci%2===0?"#eef3fb":"#fff",borderRight:"2px solid #dde8f4",borderBottom:"1px solid #eaeff7"}},ICONS[cat]+" "+cat),
-                    SOURCES.map(({label,color})=>e("td",{key:label,style:{padding:"7px 5px",textAlign:"right",borderBottom:"1px solid #eaeff7",color:row.bySrc[label]>0?color:"#ddd",fontWeight:row.bySrc[label]>0?600:400}},fmt(row.bySrc[label]))),
+                    SPEND_SOURCES.map(({label,color})=>e("td",{key:label,style:{padding:"7px 5px",textAlign:"right",borderBottom:"1px solid #eaeff7",color:row.bySrc[label]>0?color:"#ddd",fontWeight:row.bySrc[label]>0?600:400}},fmt(row.bySrc[label]))),
                     e("td",{style:{padding:"7px 7px",textAlign:"right",fontWeight:700,color:row.total>0?"#1F4E79":"#bbb",borderBottom:"1px solid #eaeff7"}},fmt(row.total)),
                     e("td",{style:{padding:"7px 7px",textAlign:"right",color:bud>0?"#92400e":"#bbb",borderBottom:"1px solid #eaeff7"}},bud>0?fmt(bud):"—"),
                     e("td",{style:{padding:"7px 7px",textAlign:"right",fontWeight:variance!==null?700:400,borderBottom:"1px solid #eaeff7",color:variance===null?"#bbb":over?"#dc2626":"#16a34a"}},variance===null?"—":(over?"+":"")+fmt(Math.abs(variance))+(over?" ⚠️":" ✓"))
@@ -911,7 +960,7 @@ function MainApp({user,onLogout}) {
                 }),
                 e("tr",{style:{background:"#1F4E79"}},
                   e("td",{style:{padding:"10px 14px",fontWeight:700,color:"#fff",position:"sticky",left:0,background:"#1F4E79"}},"GRAND TOTAL"),
-                  SOURCES.map(({label})=>e("td",{key:label,style:{padding:"10px 5px",textAlign:"right",fontWeight:700,color:"#fff",fontSize:11}},fmt(srcT[label]))),
+                  SPEND_SOURCES.map(({label})=>e("td",{key:label,style:{padding:"10px 5px",textAlign:"right",fontWeight:700,color:"#fff",fontSize:11}},fmt(srcT[label]))),
                   e("td",{style:{padding:"10px 7px",textAlign:"right",fontWeight:800,color:"#fff",fontSize:13}},fmt(grand)),
                   e("td",{style:{padding:"10px 7px",textAlign:"right",fontWeight:700,color:"#fff"}},fmt(totalBud)),
                   e("td",{style:{padding:"10px 7px",textAlign:"right",fontWeight:700,color:rem!==null?(rem>=0?"#86efac":"#fca5a5"):"#fff"}},rem!==null?(rem>=0?"✓ "+fmt(rem):"⚠️ +"+fmt(Math.abs(rem))):"—")
@@ -967,7 +1016,7 @@ function MainApp({user,onLogout}) {
                     e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7",fontWeight:500}},r.description||""),
                     e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7"}},ICONS[r.category]+" "+r.category),
                     e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7",color:src?.color||"#111",fontWeight:600}},r.source),
-                    e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7",textAlign:"right",fontWeight:700,color:"#1F4E79"}},"₹"+fmtN(r.amount))
+                    e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7",textAlign:"right",fontWeight:700,color:isSpend(r)?"#1F4E79":"#9ca3af"}},isSpend(r)?"₹"+fmtN(r.amount):"₹"+fmtN(r.amount)+" (voucher, not counted)")
                   );
                 })
               )
