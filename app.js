@@ -72,6 +72,10 @@ const INCOME_CAT = "Money Received";          // money Sreekanth transfers in �
 const TRACKING_START = "2026-11-01";           // "Money in hand" counts from this date onwards
 const ALL_CATEGORIES = [...CATEGORIES, INCOME_CAT];
 const isIncome = r => r.category === INCOME_CAT;
+// Older entries were saved under category names that no longer exist. Map them to today's names, and never let an
+// unknown name drop out of the totals (it falls into Miscellaneous instead).
+const LEGACY_CATEGORY = { "School & Education":"Kids Activities & School", "Dining Out & Sweets":"Restaurants" };
+function normalizeCat(c){ if(!c) return "Miscellaneous"; if(LEGACY_CATEGORY[c]) return LEGACY_CATEGORY[c]; return ALL_CATEGORIES.includes(c)?c:"Miscellaneous"; }
 function rowType(r){ if(isIncome(r)) return "Money received"; return !WALLET_ACCOUNTS.includes(r.source) ? (r.category===LOAD_CAT ? "Voucher purchase / load" : "Direct spend") : "Paid from voucher"; }
 const isVoucherRow = r => WALLET_ACCOUNTS.includes(r.source) && !isIncome(r);   // paid from a voucher balance (not counted)
 const isSpend = r => !WALLET_ACCOUNTS.includes(r.source) && !isIncome(r);       // true = counts toward monthly spending
@@ -215,7 +219,7 @@ async function dbFetch(month, year) {
     day:         r.day || new Date(r.date).getDate(),
     note:        r.note || r.description || "",
     description: r.description || "",
-    category:    r.category || "Miscellaneous",
+    category:    normalizeCat(r.category),
     source:      r.account || "",
     amount:      parseFloat(r.amount) || 0,
     enteredBy:   r.entered_by || "",
@@ -261,7 +265,7 @@ async function dbFetchRange(from, to) {
   if (error) throw error;
   return (data || []).map(r => ({
     id: String(r.id), amount: parseFloat(r.amount)||0,
-    description: r.description||"", category: r.category||"Miscellaneous",
+    description: r.description||"", category: normalizeCat(r.category),
     source: r.account||"", date: r.date, enteredBy: r.entered_by||"", vendor: r.vendor||"",
   }));
 }
@@ -280,12 +284,12 @@ async function dbFetchAllPages(build) {
 // All-time rows that have a vendor — used for voucher balances
 async function dbFetchVendorRows() {
   const data = await dbFetchAllPages(()=>sb.from("expenses").select("id,amount,category,account,vendor").not("vendor","is",null));
-  return data.map(r=>({ amount: parseFloat(r.amount)||0, category: r.category||"", source: r.account||"", vendor: r.vendor||"" }));
+  return data.map(r=>({ amount: parseFloat(r.amount)||0, category: normalizeCat(r.category), source: r.account||"", vendor: r.vendor||"" }));
 }
 // Everything from TRACKING_START onwards — used for "Money in hand"
 async function dbFetchSince(fromDate) {
   const data = await dbFetchAllPages(()=>sb.from("expenses").select("id,amount,category,account").gte("date", fromDate+"T00:00:00"));
-  return data.map(r=>({ amount: parseFloat(r.amount)||0, category: r.category||"", source: r.account||"" }));
+  return data.map(r=>({ amount: parseFloat(r.amount)||0, category: normalizeCat(r.category), source: r.account||"" }));
 }
 
 // Reports: rows by the DAY you picked (year/month/day), not by the time the entry was typed
@@ -300,12 +304,15 @@ async function dbFetchByDayRange(fromISO, toISO) {
     const key = r.year+"-"+String(mi+1).padStart(2,"0")+"-"+String(day).padStart(2,"0");
     if (key < fromISO || key > toISO) continue;
     out.push({ id:String(r.id), dateKey:key, monthIdx:mi, year:+r.year, day, amount:parseFloat(r.amount)||0,
-      description:r.description||"", category:r.category||"Miscellaneous", source:r.account||"", vendor:r.vendor||"", enteredBy:r.entered_by||"" });
+      description:r.description||"", category:normalizeCat(r.category), source:r.account||"", vendor:r.vendor||"", enteredBy:r.entered_by||"" });
   }
   return out.sort((a,b)=>a.dateKey<b.dateKey?-1:a.dateKey>b.dateKey?1:Number(a.id)-Number(b.id));
 }
 function toISODate(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function csvCell(c){ return '"'+String(c).replace(/"/g,'""')+'"'; }
+const REP_RAW_COLS=[["date","Date"],["desc","Description"],["cat","Category"],["vendor","Vendor"],["acct","Bank / Card"],["amount","Amount"],["type","Type"],["by","Entered by"]];
+const REP_SUM_COLS=[["entries","Entries"],["share","% of total"],["avg","Average per entry"],["budget","Budget"],["var","Over / under budget"]];
+function loadPref(k,def){ try{ const v=JSON.parse(localStorage.getItem(k)||"null"); return Array.isArray(v)&&v.length?v:def; }catch(ex){ return def; } }
 
 async function dbFetchBudgets() {
   const { data } = await sb.from("budgets").select("*");
@@ -457,6 +464,8 @@ function MainApp({user,onLogout}) {
   const [repType,setRepType] = useState("spend");     // spend | voucher | income
   const [repView,setRepView] = useState("summary");   // summary | raw
   const [repGroup,setRepGroup] = useState("category");// category | account | vendor | month
+  const [repRawCols,setRepRawCols] = useState(()=>loadPref("repRawCols",["date","desc","cat","vendor","acct","amount"]));
+  const [repSumCols,setRepSumCols] = useState(()=>loadPref("repSumCols",["entries","share"]));
   const [repRowDim,setRepRowDim] = useState("category");  // two-way table: down the side
   const [repColDim,setRepColDim] = useState("account");   // two-way table: across the top
   const [repData,setRepData] = useState([]);
@@ -561,7 +570,7 @@ function MainApp({user,onLogout}) {
     if (!exportFrom||!exportTo) { setEmailMsg("Please select From and To dates first."); return; }
     setEmailSending(true); setEmailMsg("");
     try {
-      const data = await dbFetchRange(exportFrom+"T00:00:00", exportTo+"T23:59:59");
+      const data = await dbFetchByDayRange(exportFrom, exportTo);
       if (data.length===0) { setEmailMsg("No data in this range."); setEmailSending(false); return; }
       const summaryRows = CATEGORIES.map(cat=>{
         const catAll = data.filter(r=>r.category===cat);
@@ -577,8 +586,8 @@ function MainApp({user,onLogout}) {
       const summaryHeader = ["Category",...SPEND_SOURCES.map(s=>s.label),"Total","Budget","Variance","Paid from Voucher (not counted)"].join(",");
       const csvSummary = [summaryHeader,...summaryRows].join("\n");
 
-      const rawRows = data.sort((a,b)=>new Date(a.date)-new Date(b.date))
-        .map(r=>[r.date?.slice(0,10)||"",r.description||"",r.category,r.vendor||"",r.source,isSpend(r)?(r.amount||0):0,isVoucherRow(r)?(r.amount||0):0,isIncome(r)?(r.amount||0):0,rowType(r),r.enteredBy||""].join(","));
+      const rawRows = data.sort((a,b)=>a.dateKey<b.dateKey?-1:a.dateKey>b.dateKey?1:Number(a.id)-Number(b.id))
+        .map(r=>[r.dateKey,r.description||"",r.category,r.vendor||"",r.source,isSpend(r)?(r.amount||0):0,isVoucherRow(r)?(r.amount||0):0,isIncome(r)?(r.amount||0):0,rowType(r),r.enteredBy||""].join(","));
       const rawHeader = ["Date","Description","Category","Vendor","Account","Amount (counted)","Paid from Voucher (not counted)","Money Received","Type","Entered By"].join(",");
       const csvRaw = [rawHeader,...rawRows].join("\n");
 
@@ -595,7 +604,7 @@ function MainApp({user,onLogout}) {
     if (!exportFrom||!exportTo) { alert("Please select From and To dates."); return; }
     setExporting(true);
     try {
-      const data = await dbFetchRange(exportFrom+"T00:00:00", exportTo+"T23:59:59");
+      const data = await dbFetchByDayRange(exportFrom, exportTo);
       setExportRows(data);
       if (data.length===0) { alert("No data in this range."); setExporting(false); return; }
       let csv, filename;
@@ -616,7 +625,7 @@ function MainApp({user,onLogout}) {
         filename = `SmartExpense_Summary_${exportFrom}_to_${exportTo}.csv`;
       } else {
         const header = ["Date","Day","Description","Category","Vendor","Account","Amount (counted)","Paid from Voucher (not counted)","Money Received","Type","Entered By"];
-        const drows = data.sort((a,b)=>new Date(a.date)-new Date(b.date)).map(r=>[r.date?.slice(0,10)||"",new Date(r.date).getDate(),r.description||"",r.category,r.vendor||"",r.source,isSpend(r)?(r.amount||0):0,isVoucherRow(r)?(r.amount||0):0,isIncome(r)?(r.amount||0):0,rowType(r),r.enteredBy||""]);
+        const drows = data.sort((a,b)=>a.dateKey<b.dateKey?-1:a.dateKey>b.dateKey?1:Number(a.id)-Number(b.id)).map(r=>[r.dateKey,r.day,r.description||"",r.category,r.vendor||"",r.source,isSpend(r)?(r.amount||0):0,isVoucherRow(r)?(r.amount||0):0,isIncome(r)?(r.amount||0):0,rowType(r),r.enteredBy||""]);
         csv = [header,...drows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\r\n");
         filename = `SmartExpense_Raw_${exportFrom}_to_${exportTo}.csv`;
       }
@@ -715,6 +724,33 @@ function MainApp({user,onLogout}) {
     const arr=Object.values(m);
     return repGroup==="month" ? arr.sort((a,b)=>a.sortKey-b.sortKey) : arr.sort((a,b)=>b.total-a.total);
   },[repRows,repGroup]);
+  // ── Budget (monthly budgets, prorated by day for the chosen dates) and column choices
+  const repMonths = useMemo(()=>{
+    if(!repFrom||!repTo||repFrom>repTo) return 0;
+    let f=0; const d=new Date(repFrom+"T00:00:00"); const end=new Date(repTo+"T00:00:00");
+    while(d<=end){ f+=1/new Date(d.getFullYear(),d.getMonth()+1,0).getDate(); d.setDate(d.getDate()+1); }
+    return f;
+  },[repFrom,repTo]);
+  const repBudgetOK = repType==="spend" && !repAcc && !repVen;
+  const repBudgetWanted = repView!=="raw" && (repSumCols.includes("budget")||repSumCols.includes("var"));
+  const repBudgetActive = repBudgetWanted && repBudgetOK && ((repView==="summary"&&repGroup==="category")||(repView==="table"&&repRowDim==="category"));
+  function repBudget(cat){ return (parseFloat(budgets[cat])||0)*repMonths; }
+  function toggleCol(storeKey,list,setList,master,k){
+    const next = list.includes(k) ? list.filter(x=>x!==k) : master.map(m=>m[0]).filter(x=>x===k||list.includes(x));
+    if(next.length===0) return;
+    setList(next); try{ localStorage.setItem(storeKey,JSON.stringify(next)); }catch(ex){}
+  }
+  function budgetExtras(have){   // categories that have a budget but no spending yet — still shown so you see what is unspent
+    return CATEGORIES.filter(c=>!have.has(c)&&(parseFloat(budgets[c])||0)>0&&(!repCat||repCat===c));
+  }
+  const repGroupsShown = useMemo(()=>{
+    if(!(repBudgetActive&&repView==="summary")) return repGroups;
+    const extra=budgetExtras(new Set(repGroups.map(g=>g.key))).map(c=>({key:c,total:0,count:0,sortKey:0}));
+    return [...repGroups,...extra].sort((a,b)=>b.total-a.total);
+  },[repGroups,repBudgetActive,repView,budgets,repCat]);
+  function rawVal(r,k,csv){
+    return k==="date"?(csv?r.dateKey:r.dateKey.split("-").reverse().join("-")) : k==="desc"?r.description : k==="cat"?r.category : k==="vendor"?(r.vendor||"—") : k==="acct"?r.source : k==="amount"?r.amount : k==="type"?rowType(r) : r.enteredBy;
+  }
   const DIM_LABEL = {category:"Category",account:"Bank/Card",vendor:"Vendor",month:"Month"};
   function dimKey(r,dim){ return dim==="category"?r.category : dim==="account"?(r.source||"—") : dim==="vendor"?(r.vendor||"(no vendor)") : MONTHS[r.monthIdx].slice(0,3)+" "+r.year; }
   const repPivot = useMemo(()=>{
@@ -727,25 +763,41 @@ function MainApp({user,onLogout}) {
     });
     const order=(totals,sort,dim)=>Object.keys(totals).sort((a,b)=>dim==="month"?sort[a]-sort[b]:totals[b]-totals[a]);
     const rowKeys=order(rowT,rowSort,repRowDim), colKeys=order(colT,colSort,repColDim);
+    if(repBudgetActive&&repRowDim==="category") budgetExtras(new Set(rowKeys)).forEach(c=>rowKeys.push(c));
     let max=0; rowKeys.forEach(rk=>colKeys.forEach(ck=>{ max=Math.max(max,cells[rk]?.[ck]||0); }));
     return {cells,rowT,colT,rowKeys,colKeys,max};
-  },[repRows,repRowDim,repColDim]);
+  },[repRows,repRowDim,repColDim,repBudgetActive,budgets,repCat]);
   function repLabel(){ return repFrom.split("-").reverse().join("-")+" to "+repTo.split("-").reverse().join("-"); }
   function repCsv(){
     const typeName = {spend:"Counted spend",voucher:"Paid from voucher (not counted)",income:"Money received"}[repType];
+    const wantB = repSumCols.includes("budget"), wantV = repSumCols.includes("var");
     if(repView==="raw"){
-      const header=["Date","Description","Category","Vendor","Account","Amount","Type","Entered By"];
-      const body=repRows.map(r=>[r.dateKey,r.description,r.category,r.vendor,r.source,r.amount,rowType(r),r.enteredBy]);
-      return [header,...body,["","","","","","TOTAL "+repTotal,"",""]];
+      const cols=REP_RAW_COLS.filter(c=>repRawCols.includes(c[0]));
+      const body=repRows.map(r=>cols.map(c=>rawVal(r,c[0],true)));
+      const totalRow=cols.map(c=>c[0]==="amount"?repTotal:(c[0]===cols[0][0]?"TOTAL":""));
+      return [cols.map(c=>c[1]),...body,totalRow];
     }
     if(repView==="table"){
-      const P=repPivot;
-      return [[DIM_LABEL[repRowDim]+" \\ "+DIM_LABEL[repColDim],...P.colKeys,"Total"],
-        ...P.rowKeys.map(rk=>[rk,...P.colKeys.map(ck=>P.cells[rk]?.[ck]||0),P.rowT[rk]]),
-        ["TOTAL",...P.colKeys.map(ck=>P.colT[ck]),repTotal]];
+      const P=repPivot, B=repBudgetActive;
+      const head=[DIM_LABEL[repRowDim]+" \\ "+DIM_LABEL[repColDim],...P.colKeys,"Total"];
+      if(B&&wantB) head.push("Budget"); if(B&&wantV) head.push("Over / under budget");
+      const rows=P.rowKeys.map(rk=>{ const t=P.rowT[rk]||0, bud=B?repBudget(rk):0;
+        const r=[rk,...P.colKeys.map(ck=>P.cells[rk]?.[ck]||0),t];
+        if(B&&wantB) r.push(Math.round(bud)); if(B&&wantV) r.push(bud>0?Math.round(t-bud):""); return r; });
+      const totB=B?P.rowKeys.reduce((a,rk)=>a+repBudget(rk),0):0;
+      const tot=["TOTAL",...P.colKeys.map(ck=>P.colT[ck]),repTotal];
+      if(B&&wantB) tot.push(Math.round(totB)); if(B&&wantV) tot.push(totB>0?Math.round(repTotal-totB):"");
+      return [head,...rows,tot];
     }
     const gl={category:"Category",account:"Account",vendor:"Vendor",month:"Month"}[repGroup];
-    return [[gl,"Entries","Total","% of total"],...repGroups.map(g=>[g.key,g.count,g.total,repTotal>0?(g.total/repTotal*100).toFixed(1)+"%":""]),["TOTAL ("+typeName+")",repRows.length,repTotal,""]];
+    const cols=REP_SUM_COLS.filter(c=>repSumCols.includes(c[0])&&((c[0]!=="budget"&&c[0]!=="var")||repBudgetActive));
+    const head=[gl,"Total",...cols.map(c=>c[1])];
+    const cell=(g,k)=>{ const bud=repBudgetActive?repBudget(g.key):0;
+      return k==="entries"?g.count : k==="share"?(repTotal>0?(g.total/repTotal*100).toFixed(1)+"%":"") : k==="avg"?(g.count>0?Math.round(g.total/g.count):"") : k==="budget"?Math.round(bud) : (bud>0?Math.round(g.total-bud):""); };
+    const rows=repGroupsShown.map(g=>[g.key,g.total,...cols.map(c=>cell(g,c[0]))]);
+    const totB=repBudgetActive?repGroupsShown.reduce((a,g)=>a+repBudget(g.key),0):0;
+    const tot=["TOTAL ("+typeName+")",repTotal,...cols.map(c=>c[0]==="entries"?repRows.length:c[0]==="share"?"100%":c[0]==="avg"?(repRows.length?Math.round(repTotal/repRows.length):""):c[0]==="budget"?Math.round(totB):(totB>0?Math.round(repTotal-totB):""))];
+    return [head,...rows,tot];
   }
   function repDownload(){
     const csv=repCsv().map(r=>r.map(csvCell).join(",")).join("\r\n");
@@ -1164,6 +1216,19 @@ function MainApp({user,onLogout}) {
               e("label",{style:{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginBottom:3}},l),
               e("select",{value:v,onChange:ev=>set(ev.target.value),style:{width:"100%",padding:"8px 8px",border:"1px solid #e5e7eb",borderRadius:8,fontSize:12,boxSizing:"border-box"}},
                 [["category","Category"],["account","Bank / Card"],["vendor","Vendor / App"],["month","Month"]].map(([val,lab])=>e("option",{key:val,value:val},lab)))))
+          ),
+          // Column / value chooser — pick what you want to see
+          e("div",{style:{marginTop:12,paddingTop:10,borderTop:"1px dashed #e5e7eb"}},
+            e("div",{style:{fontSize:11,fontWeight:700,color:"#374151",marginBottom:6}},repView==="raw"?"Columns to show":repView==="table"?"Also show":"Columns to show"),
+            e("div",{style:{display:"flex",flexWrap:"wrap",gap:6}},
+              (repView==="raw"
+                ?REP_RAW_COLS.map(([k,l])=>[k,l,repRawCols.includes(k),()=>toggleCol("repRawCols",repRawCols,setRepRawCols,REP_RAW_COLS,k)])
+                :(repView==="table"?REP_SUM_COLS.filter(c=>c[0]==="budget"||c[0]==="var"):REP_SUM_COLS).map(([k,l])=>[k,l,repSumCols.includes(k),()=>toggleCol("repSumCols",repSumCols,setRepSumCols,REP_SUM_COLS,k)])
+              ).map(([k,l,on,fn])=>e("button",{key:k,onClick:fn,style:{padding:"6px 10px",borderRadius:20,border:"1px solid "+(on?"#16a34a":"#e5e7eb"),background:on?"#f0fdf4":"#fff",color:on?"#166534":"#6b7280",fontSize:11,fontWeight:600,cursor:"pointer"}},(on?"✓ ":"")+l))
+            ),
+            repBudgetWanted&&!repBudgetActive&&e("div",{style:{fontSize:11,color:"#92400e",marginTop:8,lineHeight:1.5}},
+              "Budget can be shown only when rows are Categories, “Show” is Counted spending, and the Bank and Vendor filters are cleared."),
+            repBudgetActive&&e("div",{style:{fontSize:10,color:"#6b7280",marginTop:8}},"Budget for these dates = monthly budget × "+repMonths.toFixed(2)+" months (prorated by day).")
           )
         ),
         e("div",{style:{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,0.07)"}},
@@ -1178,40 +1243,64 @@ function MainApp({user,onLogout}) {
           repLoading?e("div",{style:{fontSize:12,color:"#6b7280",padding:"14px 0",textAlign:"center"}},"Loading…"):
           repRows.length===0?e("div",{style:{fontSize:12,color:"#9ca3af",fontStyle:"italic",padding:"14px 0",textAlign:"center"}},"No entries match these filters."):
           repView==="summary"
-            ?repGroups.map((g,i)=>e("div",{key:g.key,style:{marginBottom:10}},
-                e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:3}},
-                  e("span",{style:{fontSize:12,fontWeight:i<3&&repGroup!=="month"?700:500,color:"#374151"}},(repGroup==="category"?(ICONS[g.key]||"")+" ":"")+g.key+" · "+g.count),
-                  e("span",{style:{fontSize:12,fontWeight:700}},"₹"+fmtN(g.total)+(repTotal>0?" ("+(g.total/repTotal*100).toFixed(0)+"%)":""))),
-                e("div",{style:{height:7,background:"#f3f4f6",borderRadius:4,overflow:"hidden"}},e("div",{style:{width:(repGroups.reduce((m,x)=>Math.max(m,x.total),1)>0?g.total/repGroups.reduce((m,x)=>Math.max(m,x.total),1)*100:0)+"%",height:"100%",background:"#2E75C2",borderRadius:4}}))))
+            ?(()=>{
+              const cols=REP_SUM_COLS.filter(c=>repSumCols.includes(c[0])&&((c[0]!=="budget"&&c[0]!=="var")||repBudgetActive));
+              const th=(t,al)=>e("th",{key:t,style:{padding:"7px 8px",textAlign:al||"right",background:"#1F4E79",color:"#fff",fontWeight:700,whiteSpace:"nowrap"}},t);
+              const cellFor=(g,k)=>{ const bud=repBudgetActive?repBudget(g.key):0, over=bud>0&&g.total>bud;
+                if(k==="entries") return g.count;
+                if(k==="share") return repTotal>0?(g.total/repTotal*100).toFixed(0)+"%":"—";
+                if(k==="avg") return g.count>0?fmt(g.total/g.count):"—";
+                if(k==="budget") return bud>0?fmt(bud):"—";
+                return bud>0?e("span",{style:{color:over?"#dc2626":"#16a34a",fontWeight:700}},(over?"+":"")+fmt(Math.abs(g.total-bud))+(over?" over":" left")):"—"; };
+              const totB=repBudgetActive?repGroupsShown.reduce((a,g)=>a+repBudget(g.key),0):0;
+              return e("div",{style:{overflowX:"auto"}},e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:12}},
+                e("thead",null,e("tr",null,th(DIM_LABEL[repGroup],"left"),th("Total"),cols.map(c=>th(c[1])))),
+                e("tbody",null,
+                  repGroupsShown.map((g,i)=>e("tr",{key:g.key,style:{background:i%2===0?"#f8faff":"#fff"}},
+                    e("td",{style:{padding:"7px 8px",borderBottom:"1px solid #eaeff7",fontWeight:600,color:"#1F4E79"}},(repGroup==="category"?(ICONS[g.key]||"")+" ":"")+g.key),
+                    e("td",{style:{padding:"7px 8px",borderBottom:"1px solid #eaeff7",textAlign:"right",fontWeight:700}},g.total>0?"₹"+fmtN(g.total):"—"),
+                    cols.map(c=>e("td",{key:c[0],style:{padding:"7px 8px",borderBottom:"1px solid #eaeff7",textAlign:"right",color:"#374151"}},cellFor(g,c[0]))))),
+                  e("tr",{style:{background:"#1F4E79"}},
+                    e("td",{style:{padding:"8px",color:"#fff",fontWeight:800}},"TOTAL"),
+                    e("td",{style:{padding:"8px",textAlign:"right",color:"#fff",fontWeight:800}},"₹"+fmtN(repTotal)),
+                    cols.map(c=>e("td",{key:c[0],style:{padding:"8px",textAlign:"right",color:"#fff",fontWeight:700}},
+                      c[0]==="entries"?repRows.length:c[0]==="share"?"100%":c[0]==="avg"?(repRows.length?fmt(repTotal/repRows.length):"—"):c[0]==="budget"?(totB>0?fmt(totB):"—"):(totB>0?(repTotal>totB?"+":"")+fmt(Math.abs(repTotal-totB))+(repTotal>totB?" over":" left"):"—")))
+                  ))));
+            })()
             :repView==="table"
             ?e("div",{style:{overflowX:"auto"}},
               e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
                 e("thead",null,e("tr",null,
                   e("th",{style:{padding:"7px 8px",textAlign:"left",background:"#1F4E79",color:"#fff",position:"sticky",left:0,minWidth:120}},DIM_LABEL[repRowDim]+" ↓ / "+DIM_LABEL[repColDim]+" →"),
                   repPivot.colKeys.map(ck=>e("th",{key:ck,style:{padding:"7px 6px",textAlign:"right",background:"#2E75C2",color:"#fff",fontWeight:700,minWidth:70}},ck)),
-                  e("th",{style:{padding:"7px 8px",textAlign:"right",background:"#0d2847",color:"#fff",fontWeight:800,minWidth:75}},"Total"))),
+                  e("th",{style:{padding:"7px 8px",textAlign:"right",background:"#0d2847",color:"#fff",fontWeight:800,minWidth:75}},"Total"),
+                  repBudgetActive&&repSumCols.includes("budget")&&e("th",{style:{padding:"7px 8px",textAlign:"right",background:"#92400e",color:"#fff",fontWeight:700,minWidth:75}},"Budget"),
+                  repBudgetActive&&repSumCols.includes("var")&&e("th",{style:{padding:"7px 8px",textAlign:"right",background:"#7B2C2C",color:"#fff",fontWeight:700,minWidth:90}},"Over / under"))),
                 e("tbody",null,
                   repPivot.rowKeys.map((rk,i)=>e("tr",{key:rk,style:{background:i%2===0?"#f8faff":"#fff"}},
                     e("td",{style:{padding:"6px 8px",borderBottom:"1px solid #eaeff7",fontWeight:600,color:"#1F4E79",position:"sticky",left:0,background:i%2===0?"#eef3fb":"#fff",borderRight:"2px solid #dde8f4"}},(repRowDim==="category"?(ICONS[rk]||"")+" ":"")+rk),
                     repPivot.colKeys.map(ck=>{const v=repPivot.cells[rk]?.[ck]||0;
                       return e("td",{key:ck,style:{padding:"6px 6px",textAlign:"right",borderBottom:"1px solid #eaeff7",background:v>0?"rgba(46,117,194,"+(0.08+0.32*v/Math.max(1,repPivot.max))+")":"transparent",color:v>0?"#111":"#ccc",fontWeight:v>0?600:400}},v>0?fmt(v):"—");}),
-                    e("td",{style:{padding:"6px 8px",textAlign:"right",borderBottom:"1px solid #eaeff7",fontWeight:800,color:"#1F4E79"}},fmt(repPivot.rowT[rk]))
+                    e("td",{style:{padding:"6px 8px",textAlign:"right",borderBottom:"1px solid #eaeff7",fontWeight:800,color:"#1F4E79"}},fmt(repPivot.rowT[rk])),
+                    repBudgetActive&&repSumCols.includes("budget")&&e("td",{style:{padding:"6px 8px",textAlign:"right",borderBottom:"1px solid #eaeff7",color:"#92400e"}},repBudget(rk)>0?fmt(repBudget(rk)):"—"),
+                    repBudgetActive&&repSumCols.includes("var")&&e("td",{style:{padding:"6px 8px",textAlign:"right",borderBottom:"1px solid #eaeff7",fontWeight:700,color:(repPivot.rowT[rk]||0)>repBudget(rk)?"#dc2626":"#16a34a"}},repBudget(rk)>0?(((repPivot.rowT[rk]||0)>repBudget(rk)?"+":"")+fmt(Math.abs((repPivot.rowT[rk]||0)-repBudget(rk)))+((repPivot.rowT[rk]||0)>repBudget(rk)?" over":" left")):"—")
                   )),
                   e("tr",{style:{background:"#1F4E79"}},
                     e("td",{style:{padding:"8px 8px",color:"#fff",fontWeight:800,position:"sticky",left:0,background:"#1F4E79"}},"TOTAL"),
                     repPivot.colKeys.map(ck=>e("td",{key:ck,style:{padding:"8px 6px",textAlign:"right",color:"#fff",fontWeight:700}},fmt(repPivot.colT[ck]))),
-                    e("td",{style:{padding:"8px 8px",textAlign:"right",color:"#fff",fontWeight:900}},fmt(repTotal)))
+                    e("td",{style:{padding:"8px 8px",textAlign:"right",color:"#fff",fontWeight:900}},fmt(repTotal)),
+                    repBudgetActive&&repSumCols.includes("budget")&&e("td",{style:{padding:"8px 8px",textAlign:"right",color:"#fff",fontWeight:700}},fmt(repPivot.rowKeys.reduce((a,rk)=>a+repBudget(rk),0))),
+                    repBudgetActive&&repSumCols.includes("var")&&e("td",{style:{padding:"8px 8px",textAlign:"right",color:"#fff",fontWeight:700}},(()=>{const tb=repPivot.rowKeys.reduce((a,rk)=>a+repBudget(rk),0);return tb>0?((repTotal>tb?"+":"")+fmt(Math.abs(repTotal-tb))+(repTotal>tb?" over":" left")):"—";})()))
                 )))
-            :e("div",{style:{overflowX:"auto"}},
-              e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
-                e("thead",null,e("tr",null,["Date","Description","Category","Vendor","Account","Amount"].map(h=>e("th",{key:h,style:{padding:"7px 8px",textAlign:h==="Amount"?"right":"left",background:"#1F4E79",color:"#fff",fontWeight:700,whiteSpace:"nowrap"}},h)))),
-                e("tbody",null,repRows.map((r,i)=>e("tr",{key:r.id,style:{background:i%2===0?"#f8faff":"#fff"}},
-                  e("td",{style:{padding:"6px 8px",borderBottom:"1px solid #eaeff7",whiteSpace:"nowrap",color:"#6b7280"}},r.dateKey.split("-").reverse().join("-")),
-                  e("td",{style:{padding:"6px 8px",borderBottom:"1px solid #eaeff7",fontWeight:500}},r.description),
-                  e("td",{style:{padding:"6px 8px",borderBottom:"1px solid #eaeff7"}},(ICONS[r.category]||"")+" "+r.category),
-                  e("td",{style:{padding:"6px 8px",borderBottom:"1px solid #eaeff7"}},r.vendor||"—"),
-                  e("td",{style:{padding:"6px 8px",borderBottom:"1px solid #eaeff7"}},r.source),
-                  e("td",{style:{padding:"6px 8px",borderBottom:"1px solid #eaeff7",textAlign:"right",fontWeight:700}},"₹"+fmtN(r.amount))))))))
+            :(()=>{
+              const cols=REP_RAW_COLS.filter(c=>repRawCols.includes(c[0]));
+              return e("div",{style:{overflowX:"auto"}},
+                e("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+                  e("thead",null,e("tr",null,cols.map(c=>e("th",{key:c[0],style:{padding:"7px 8px",textAlign:c[0]==="amount"?"right":"left",background:"#1F4E79",color:"#fff",fontWeight:700,whiteSpace:"nowrap"}},c[1])))),
+                  e("tbody",null,repRows.map((r,i)=>e("tr",{key:r.id,style:{background:i%2===0?"#f8faff":"#fff"}},
+                    cols.map(c=>e("td",{key:c[0],style:{padding:"6px 8px",borderBottom:"1px solid #eaeff7",textAlign:c[0]==="amount"?"right":"left",whiteSpace:c[0]==="date"?"nowrap":"normal",fontWeight:c[0]==="amount"?700:(c[0]==="desc"?500:400),color:c[0]==="date"?"#6b7280":"#111"}},
+                      c[0]==="amount"?"₹"+fmtN(r.amount):c[0]==="cat"?(ICONS[r.category]||"")+" "+r.category:rawVal(r,c[0],false))))))));
+            })())
       ),
 
       // ── EXPORT TAB ──
@@ -1246,7 +1335,7 @@ function MainApp({user,onLogout}) {
                 exportRows.map((r,i)=>{
                   const src=SOURCES.find(s=>s.label===r.source);
                   return e("tr",{key:r.id,style:{background:i%2===0?"#f8faff":"#fff"}},
-                    e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7",fontSize:10,color:"#6b7280"}},r.date?.slice(0,10)||""),
+                    e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7",fontSize:10,color:"#6b7280"}},r.dateKey||""),
                     e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7",fontWeight:500}},r.description||""),
                     e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7"}},ICONS[r.category]+" "+r.category),
                     e("td",{style:{padding:"7px 10px",borderBottom:"1px solid #eaeff7",color:src?.color||"#111",fontWeight:600}},r.source),
